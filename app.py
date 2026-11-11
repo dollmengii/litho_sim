@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
+import charts as CH
 import ui as UI
 
 from litho import grid as G
@@ -428,55 +429,52 @@ tab1, tab2, tab3, tab5, tab6, tab8, tab7, tab4 = st.tabs(
 )
 
 with tab1:
-    fig, ax = plt.subplots(figsize=(9, 2.4))
-    ax.step(sim_grid.x, np.abs(mask) ** 2, where="mid", lw=1.2)
-    ax.set_xlabel("x [nm]")
-    ax.set_ylabel("투과율 $|t|^2$")
-    ax.set_ylim(-0.1, 1.1)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
-    st.pyplot(fig, clear_figure=True)
-
-    fig2, ax2 = plt.subplots(figsize=(9, 2.0))
-    ax2.imshow(
-        MK.to_2d(np.abs(mask) ** 2, 120), cmap="gray", aspect="auto",
-        extent=[0, sim_grid.field_width, 0, sim_grid.field_width / 4],
-    )
-    ax2.set_xlabel("x [nm]")
-    ax2.set_ylabel("y [nm]")
-    fig2.tight_layout()
-    st.pyplot(fig2, clear_figure=True)
-
-    st.info(
-        f"CD = {cd_nm:.1f} nm · Space = {pitch - cd_nm:.1f} nm · "
-        f"half-pitch = {pitch / 2:.1f} nm · {sim_grid.describe()}"
-    )
+    _t = np.abs(mask) ** 2
+    st.markdown(CH.line(
+        [(sim_grid.x, _t, UI.BEAM, "", True)],
+        h=270, xlabel="x [nm]", ylabel="투과율 |t|²", ylo=-0.05,
+    ), unsafe_allow_html=True)
+    st.markdown(CH.strip(
+        _t, sim_grid.field_width, h=150,
+        label="마스크 (위에서 본 모습)",
+    ), unsafe_allow_html=True)
+    st.markdown(UI.chips([
+        ("CD", f"{cd_nm:.1f}", "nm"),
+        ("Space", f"{pitch - cd_nm:.1f}", "nm"),
+        ("half-pitch", f"{pitch / 2:.1f}", "nm"),
+        ("격자", f"{sim_grid.n_points}", "점"),
+        ("dx", f"{sim_grid.dx:.3f}", "nm"),
+        ("시야", f"{sim_grid.field_width:.0f}", "nm"),
+    ]), unsafe_allow_html=True)
 
 with tab2:
-    fig3, ax3 = plt.subplots(figsize=(9, 3.2))
-    ax3.plot(sim_grid.x, intensity_dosed, lw=1.8, label=f"Δz = {defocus:.0f} nm")
+    _ser = [(sim_grid.x, intensity_dosed, UI.BEAM,
+             f"Δz = {defocus:.0f} nm", True)]
     if defocus != 0.0:
         _, _, i_focus = compute(
             pitch, duty, polarity, n_periods, dx_target,
             wavelength, na, n_medium, sigma_out, sigma_in, n_src, 0.0,
         )
-        ax3.plot(
-            sim_grid.x, RS.apply_dose(i_focus, dose),
-            lw=1.0, ls="--", alpha=0.7, label="Δz = 0 nm",
-        )
-    ax3.axhline(threshold, color="crimson", ls=":", lw=1.2, label=f"threshold {threshold}")
-    ax3.set_xlabel("x [nm]")
-    ax3.set_ylabel("정규화 광강도 I")
-    ax3.legend(fontsize=8)
-    ax3.grid(alpha=0.3)
-    fig3.tight_layout()
-    st.pyplot(fig3, clear_figure=True)
+        # 채움을 끄고(None) 점선으로 그린다. 비교선이지 주인공이 아니다.
+        _ser.append((sim_grid.x, RS.apply_dose(i_focus, dose), UI.MUTED,
+                     "Δz = 0 nm", None))
+    st.markdown(CH.line(
+        _ser, h=340, xlabel="x [nm]", ylabel="정규화 광강도 I",
+        hline=threshold, hlabel=f"임계 {threshold:.2f}",
+        span=((cd_result["left_edge"], cd_result["right_edge"])
+              if cd_result["formed"] else None),
+        spanlabel=(f"CD {cd_result['cd']:.1f} nm"
+                   if cd_result["formed"] else ""),
+        ylo=0.0,
+    ), unsafe_allow_html=True)
 
     c = IM.contrast(intensity, sim_grid.x)
-    st.info(
-        f"Contrast = {c:.4f} · NILS = {cd_result['nils']:.2f} · "
-        f"I_max = {i_max:.3f} / I_min = {i_min:.3f}"
-    )
+    st.markdown(UI.chips([
+        ("Contrast", f"{c:.4f}", ""),
+        ("NILS", f"{cd_result['nils']:.2f}", ""),
+        ("I_max", f"{i_max:.3f}", ""),
+        ("I_min", f"{i_min:.3f}", ""),
+    ]), unsafe_allow_html=True)
     if defocus != 0.0:
         c0 = IM.contrast(i_focus, sim_grid.x)
         drop = (1 - c / c0) * 100 if c0 > 0 else 0.0
@@ -488,15 +486,14 @@ with tab2:
 
 with tab3:
     profile = RS.resist_profile(intensity_dosed, threshold, tone)
-    fig4, ax4 = plt.subplots(figsize=(9, 2.0))
-    ax4.imshow(
-        MK.to_2d(profile, 120), cmap="gray", aspect="auto",
-        extent=[0, sim_grid.field_width, 0, sim_grid.field_width / 4],
-    )
-    ax4.set_xlabel("x [nm]")
-    ax4.set_ylabel("y [nm]")
-    fig4.tight_layout()
-    st.pyplot(fig4, clear_figure=True)
+    st.markdown(CH.strip(
+        profile, sim_grid.field_width, h=160, on=UI.RESIST,
+        label="현상 후 남은 레지스트 (위에서 본 모습)",
+    ), unsafe_allow_html=True)
+    st.markdown(CH.line(
+        [(sim_grid.x, profile, UI.RESIST, "", True)],
+        h=200, xlabel="x [nm]", ylabel="잔막 (1 = 남음)", ylo=-0.05, yhi=1.15,
+    ), unsafe_allow_html=True)
 
     if cd_result["formed"]:
         st.success(
@@ -571,36 +568,26 @@ with tab5:
                     "스윕 범위를 넓히세요."
                 )
 
-            # Bossung curve
-            figb, axb = plt.subplots(figsize=(9, 3.4))
-            step = max(1, n_dose // 7)
-            for i in range(0, n_dose, step):
-                axb.plot(res["dz"], res["cd"][i], lw=1.2,
-                         label=f"Dose {res['doses'][i] / res['e_op']:.2f} E_op")
-            axb.axhline(res["target"], color="k", ls="-", lw=1.0)
-            axb.axhline(res["target"] * (1 + cd_tol), color="crimson", ls=":", lw=1.0)
-            axb.axhline(res["target"] * (1 - cd_tol), color="crimson", ls=":", lw=1.0)
-            axb.set_xlabel("Defocus [nm]")
-            axb.set_ylabel("CD [nm]")
-            axb.set_title("Bossung curve")
-            axb.legend(fontsize=7, ncol=2)
-            axb.grid(alpha=0.3)
-            figb.tight_layout()
-            st.pyplot(figb, clear_figure=True)
+            st.markdown(CH.bossung(
+                res["dz"], res["doses"], res["cd"],
+                res["target"], res["target"] * cd_tol,
+                h=360, highlight=defocus,
+            ), unsafe_allow_html=True)
+            st.caption(
+                "노광량별 CD 대 초점. 진한 선이 목표 노광량이고, 띠가 CD "
+                f"규격(±{cd_tol * 100:.0f} %)입니다. 띠 안에 머무는 초점 "
+                "범위가 DOF 입니다."
+            )
 
             colA, colB = st.columns(2)
             with colA:
-                figp, axp = plt.subplots(figsize=(4.6, 3.6))
-                axp.imshow(
-                    res["pw"], origin="lower", aspect="auto", cmap="Greens",
-                    extent=[res["dz"][0], res["dz"][-1],
-                            res["doses"][0] / res["e_op"], res["doses"][-1] / res["e_op"]],
+                st.markdown(CH.window_map(
+                    res["pw"], res["dz"], res["doses"] / res["e_op"], h=340,
+                ), unsafe_allow_html=True)
+                st.caption(
+                    f"규격을 만족하는 격자점 (CD ±{cd_tol * 100:.0f} %). "
+                    "세로축은 E_op 대비 노광량입니다."
                 )
-                axp.set_xlabel("Defocus [nm]")
-                axp.set_ylabel("Dose [E_op 대비]")
-                axp.set_title(f"Process Window (CD ±{cd_tol * 100:.0f}%)")
-                figp.tight_layout()
-                st.pyplot(figp, clear_figure=True)
             with colB:
                 fige, axe = plt.subplots(figsize=(4.6, 3.6))
                 axe.plot([r["el"] for r in res["curve"]],

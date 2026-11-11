@@ -39,6 +39,13 @@ OK = "#3FB950"
 WARN = "#D29922"
 BAD = "#F85149"
 
+# 차트 색. `charts.py` 가 쓴다. 브라우저판과 같은 이름·같은 값으로 두어
+# 두 화면이 형제처럼 보이게 한다.
+FG = TXT                # 본문과 같은 밝기
+BEAM = "#4FD1E0"        # 광강도 (청록)
+RESIST = "#F0A33C"      # 임계 · 레지스트 (호박)
+SPEC = "#8B9DF7"        # 규격 띠 (남보라)
+
 #: 숫자용 고정폭 글꼴. 한글은 여기 없으므로 본문 글꼴이 이어받는다.
 MONO = "'JetBrains Mono', 'IBM Plex Mono', 'Consolas', monospace"
 

@@ -20,7 +20,16 @@ surrogate_report.json
 
 # 그림 출력
 figures/
+figures_w12/
+figures_w13/
 *.png
+
+# 대리 모형 번들. app.py 는 쓰지 않으므로 배포 저장소에 넣지 않는다
+# (recommend.py 와 roundtrip_w13.py 만 쓴다). 용량이 크다.
+models/
+*.joblib
+*_report.json
+w13_result.json
 
 # 에디터
 .vscode/
