@@ -1,0 +1,7 @@
+# Streamlit Community Cloud 가 배포 때 apt 로 깔아 주는 목록.
+#
+# 왜 필요한가 : 배포 서버는 리눅스이고 맑은 고딕(윈도우)·AppleGothic(맥)이
+# 없다. 그대로 두면 matplotlib 이 글꼴을 못 찾아 그래프의 한글 축 이름과
+# 범례가 전부 네모로 나온다. 나눔고딕을 깔면 app.py 의 후보 목록에 이미
+# 들어 있는 "NanumGothic" 이 잡힌다.
+fonts-nanum

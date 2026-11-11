@@ -28,19 +28,38 @@ from litho import identify as ID
 
 # ───────────────────── 한글 폰트 설정 ─────────────────────
 def _set_korean_font():
-    """OS별 한글 폰트를 자동 선택한다. 없으면 기본 폰트로 둔다."""
+    """OS별 한글 폰트를 자동 선택한다. 없으면 기본 폰트로 둔다.
+
+    [배포 대응] 배포 서버는 리눅스라 맑은 고딕도 AppleGothic 도 없다.
+    `packages.txt` 가 나눔고딕을 깔지만, matplotlib 이 글꼴 목록을 캐시에
+    담아 두므로 **방금 깔린 글꼴을 못 보는** 경우가 있다. 후보를 하나도
+    못 찾으면 목록을 한 번 다시 읽고 재시도한다. 그래도 없으면 기본
+    글꼴로 두고 넘어간다 (그래프의 한글이 네모로 나오지만 계산은 돈다).
+    """
     candidates = [
         "Malgun Gothic",      # Windows
         "AppleGothic",        # macOS
-        "NanumGothic",        # Linux (나눔고딕 설치 시)
+        "NanumGothic",        # Linux (packages.txt 의 fonts-nanum)
         "NanumBarunGothic",
+        "NanumGothicCoding",
         "Noto Sans CJK KR",
+        "Noto Sans KR",
     ]
-    available = {f.name for f in matplotlib.font_manager.fontManager.ttflist}
-    for name in candidates:
-        if name in available:
-            plt.rcParams["font.family"] = name
-            break
+
+    def _pick():
+        avail = {f.name for f in matplotlib.font_manager.fontManager.ttflist}
+        for name in candidates:
+            if name in avail:
+                plt.rcParams["font.family"] = name
+                return True
+        return False
+
+    if not _pick():
+        try:
+            matplotlib.font_manager._load_fontmanager(try_read_cache=False)
+        except Exception:
+            pass
+        _pick()
     plt.rcParams["axes.unicode_minus"] = False  # 음수 부호 깨짐 방지
 
 
