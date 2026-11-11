@@ -1,0 +1,28 @@
+# 가상환경
+venv/
+.venv/
+env/
+
+# 파이썬 캐시
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 생성 데이터 (용량이 커서 저장소에 포함하지 않음)
+dataset/
+*.npz
+*.npy
+checkpoint*.pkl
+
+# 검사 로그 (run_all_checks.py 가 남긴다)
+check_logs/
+surrogate_report.json
+
+# 그림 출력
+figures/
+*.png
+
+# 에디터
+.vscode/
+.idea/
+.DS_Store

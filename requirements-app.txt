@@ -1,0 +1,10 @@
+# 화면(app.py)만 띄울 때 필요한 것. 배포용으로 이 파일을 지정한다.
+#
+# 기본 requirements.txt 와의 차이 : scikit-learn 과 joblib 을 뺐다. 그 둘은
+# 대리 모형 학습(train_surrogate.py)과 추천기(recommend.py)가 쓰고,
+# app.py 는 쓰지 않는다. 배포 환경은 메모리 한도가 있으므로 쓰지 않는
+# 꾸러미를 올리지 않는다.
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+streamlit>=1.30

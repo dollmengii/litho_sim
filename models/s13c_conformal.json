@@ -1,0 +1,37 @@
+{
+  "models": "models/s13c",
+  "dataset": "dataset/merged13c.npz",
+  "alpha": 0.1,
+  "q_nm": 300.0,
+  "n_cal": 60,
+  "k": 55,
+  "guarantee": 0.9016393442622951,
+  "r_median": 37.5,
+  "r_max": 431.25,
+  "signed_median": 18.75,
+  "skipped_cal": {},
+  "skipped_test": {
+    "격자 미결정": 1
+  },
+  "coverage": {
+    "n": 39,
+    "hit": 38,
+    "rate": 0.9743589743589743
+  },
+  "focus_step_nm": 18.75,
+  "q_over_step": 16.0,
+  "grid": {
+    "n_focus": 33,
+    "n_dose": 21,
+    "focus_span": 600.0,
+    "dose_span": 0.3,
+    "el": 10.0,
+    "pitch": 250.0,
+    "duty": 0.5
+  },
+  "pitch_window": 0.15,
+  "duty_window": 0.06,
+  "n_near_cal": 396,
+  "n_near_test": 278,
+  "note": "참 DOF 는 시뮬레이터가 **추천기와 같은 격자에서** 낸 값이다. 보장은 시뮬레이터 대비이며 웨이퍼 대비가 아니다."
+}

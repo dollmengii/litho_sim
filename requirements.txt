@@ -1,0 +1,11 @@
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+streamlit>=1.30
+# 11주차 : 대리 모형(train_surrogate.py). 시뮬레이터 본체는 쓰지 않으므로
+# 검증·생성만 돌릴 때는 없어도 된다.
+scikit-learn>=1.3
+# train_surrogate.py --save-model 이 직접 import 한다. scikit-learn 의
+# 의존성으로 함께 깔리기는 하지만, 우리 코드가 직접 쓰는 것은 전이 의존성에
+# 기대지 않고 명시한다(validate_w8 Case 3 이 이것을 잡아냈다).
+joblib>=1.2
