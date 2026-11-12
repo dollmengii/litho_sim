@@ -1646,6 +1646,22 @@ chk(abs(_shown23 * 193.0 / 1.35 - _r23["half_pitch_limit"]) < 5e-3,
     f"{_dig23} 자리 -> {_shown23} -> {_shown23 * 193.0 / 1.35:.2f} nm "
     f"vs 카드 {_r23['half_pitch_limit']:.2f} nm")
 
+# (자) 화면이 꺼내 쓰는 사전 열쇠가 전부 실재하는가 (102 번).
+#      96 번을 고치면서 새 열쇠를 화면이 바로 꺼내 썼는데, 저장소에
+#      litho/optics.py 가 빠진 채 올라가자 **설명 한 줄 때문에 앱 전체가**
+#      KeyError 로 죽었다. 오타와 드리프트는 아래 대조로 잡고, 판 어긋남은
+#      화면이 스스로 알리게 했다.
+_keys23 = {n.slice.value for n in _ast23.walk(_t23)
+           if isinstance(n, _ast23.Subscript)
+           and isinstance(n.value, _ast23.Name) and n.value.id == "rayleigh"
+           and isinstance(n.slice, _ast23.Constant)
+           and isinstance(n.slice.value, str)}
+_missing23 = sorted(_keys23 - set(_r23))
+chk(not _missing23, "화면이 꺼내는 rayleigh 열쇠가 전부 실재한다",
+    f"없는 열쇠 {_missing23}" if _missing23 else f"{len(_keys23)} 개")
+chk('"k3_used" not in rayleigh' in _txt23,
+    "옛 optics 와 섞였을 때 설명 줄이 앱을 죽이지 않고 그 사실을 알린다")
+
 # ---------------------------------------------------------------------------
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
