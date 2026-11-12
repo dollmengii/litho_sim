@@ -198,6 +198,34 @@ def build_table_cases(spec):
     cases.append(("k1=0.25 한계 half-pitch [nm]", 35.74,
                   OP.half_pitch_limit(0.25, 193.0, 1.35), 1e-3))
 
+    # --- 고NA 초점심도 (13주차 보완 96 번) --------------------------------
+    # 이 함수들은 4주차에 들어온 뒤 9 주 동안 **시험이 하나도 없었다.**
+    # 그 사이 화면은 k3 에 k2 를 넣고 분모의 2 도 빠뜨린 값(306.3 nm,
+    # 참값의 4 배)을 '+169.6 % 개선' 으로 띄우고 있었다. 아래 네 건 중
+    # 뒤의 둘이 그 오류를 직접 잡는다. 앞의 둘은 현재 값을 고정한다.
+    _ray = OP.rayleigh_summary(193.0, 1.35, 1.44, 0.288, 0.745)
+    cases.append(("고NA DOF [nm] (ArF 이머전, k2=0.745)",
+                  76.571, float(_ray["dof_high_na"]), 1e-2))
+    cases.append(("고NA/근축 DOF 비 (NA 1.35, n 1.44)",
+                  0.6740, float(_ray["dof_ratio"]), 1e-3))
+
+    # (a) 근축 극한 수렴. k3 = k2/2 가 맞으면 NA/n -> 0 에서 두 식이 같은
+    #     값으로 간다. k3 = k2 로 되돌리거나 분모의 2 를 빼면 이 비가
+    #     각각 2.0, 4.0 이 되어 즉시 걸린다. 과거 오류를 재현해 보면
+    #     이 한 줄만으로 잡힌다.
+    _na_small = 0.05 * 1.44
+    cases.append(("근축 극한 수렴비 (NA/n=0.05, 1 이어야 함)", 1.0,
+                  float(OP.dof_high_na(OP.k3_from_k2(0.745), 193.0, _na_small, 1.44)
+                        / OP.dof_paraxial(0.745, 193.0, _na_small, 1.44)), 1e-3))
+
+    # (b) 문헌 대조. Lin 은 근축식이 NA 0.6 에서 약 10 % 과대평가한다고
+    #     보고한다. 본 구현의 같은 지점 값은 11.1 % 다. 이 값은 2(1-cos)/s^2
+    #     로 결정되므로 식의 모양이 바뀌면 틀어진다. 상수 대조가 아니라
+    #     **함수꼴 대조**라서 (a) 와 겹치지 않는다.
+    cases.append(("근축/정확 비 (NA 0.6, n 1.0) = 1+11.1%", 1.1111,
+                  float(OP.dof_paraxial(0.745, 193.0, 0.6, 1.0)
+                        / OP.dof_high_na(OP.k3_from_k2(0.745), 193.0, 0.6, 1.0)), 1e-3))
+
     # --- 공차 예산에서 유도되는 상수 --------------------------------------
     # VERIFICATION_LIMITS 가 '2.0 을 임의로 고른 것이 아니라 예산에서
     # 유도된다' 는 근거로 이 세 값을 인용한다. 유도식을 고치면 값이
@@ -383,6 +411,24 @@ def main() -> int:
         bad += (not _ok)
         n_tot += 1
         print(f"  {'판정기준_동결.md 에 ' + _lab:<34}{_tok:>12}"
+              f"{'있음' if _ok else '없음':>14}{'ok' if _ok else '불일치':>8}")
+
+    # (라) README 가 고NA DOF 를 숫자로 인용한다(96 번). 코드가 내는 값을
+    #      글자 그대로 담고 있는지 본다. 식을 바꾸면 README 가 조용히
+    #      낡는데, 이 세 숫자는 '+169.6 %' 같은 반대 방향 표시를 다시
+    #      들여놓지 않기 위한 것이므로 특히 낡으면 안 된다.
+    from litho import optics as _OP96
+    _r96 = _OP96.rayleigh_summary(193.0, 1.35, 1.44, 0.288, 0.745)
+    for _tok, _lab in (
+        (f"{_r96['dof_paraxial']:.1f} nm", "근축 DOF"),
+        (f"{_r96['dof_high_na']:.1f} nm", "고NA DOF"),
+        (f"{(_r96['dof_ratio'] - 1) * 100:.1f} %".replace("-", "−"),
+         "고NA 보정폭"),
+    ):
+        _ok = _tok in _docs["README.md"]
+        bad += (not _ok)
+        n_tot += 1
+        print(f"  {'README.md 에 ' + _lab:<34}{_tok:>12}"
               f"{'있음' if _ok else '없음':>14}{'ok' if _ok else '불일치':>8}")
 
     print()

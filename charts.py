@@ -244,25 +244,38 @@ def strip(values, width_nm, *, h=150, xlabel="x [nm]", on=UI.FG,
     t, b = PAD["t"], h - PAD["b"]
     p = [f'<rect x="{l}" y="{t}" width="{r - l}" height="{b - t}" '
          f'fill="{off}" stroke="{UI.LINE}"/>']
-    # 같은 값이 이어지는 구간을 하나의 사각형으로 묶는다. 점마다 그리면
-    # 요소가 수천 개가 되어 느려진다.
+    # [13차 보완 100 번] 먼저 0/1 로 가른 뒤에 묶는다.
+    # 예전에는 원값끼리 0.02 안에 드는 구간을 묶었다. 그런데 대역제한
+    # 마스크의 |t|^2 는 경계에서 1.2 까지 솟았다가 평평해지므로, 밝은 칸
+    # 하나가 값 차이 때문에 여러 사각형으로 쪼개졌다. 같은 색이어도 맞닿은
+    # 사각형의 경계마다 안티에일리어싱 이음매가 생겨 칸 안에 세로줄이
+    # 보였다(2 배 배율에서 뚜렷함). 이 함수는 docstring 대로 **0/1 패턴을
+    # 그리는 것**이므로 임계로 가르고 나면 칸마다 사각형이 정확히 하나다.
+    # 덤으로 링잉 과도분이 칸 너비에 끼어들지 않는다.
+    onoff = v > 0.5
     i = 0
     while i < n:
         j = i
-        while j + 1 < n and abs(v[j + 1] - v[i]) < 0.02:
+        while j + 1 < n and onoff[j + 1] == onoff[i]:
             j += 1
-        if v[i] > 0.5:
+        if onoff[i]:
             x0 = l + (r - l) * i / n
             x1 = l + (r - l) * (j + 1) / n
             p.append(f'<rect x="{x0:.1f}" y="{t}" width="{max(x1 - x0, .6):.1f}" '
                      f'height="{b - t}" fill="{on}" opacity=".88"/>')
         i = j + 1
-    for k in range(6):
-        xv = width_nm * k / 5
-        xp = l + (r - l) * k / 5
+    # [13차 보완 97 번] 폭을 5 등분하면 1280 nm 에서 0, 256, 512, 768,
+    # 1024, 1280 이 나온다. 바로 위에 놓이는 선 그래프는 _nice_ticks 를
+    # 써서 0, 500, 1,000 이므로 같은 탭 안에서 두 패널의 눈금이 어긋났다.
+    # 규칙을 한곳에만 둔다. 선 그래프와 같은 함수를 쓴다.
+    _w = float(width_nm)
+    xt = _nice_ticks(0.0, _w)
+    xs = (xt[1] - xt[0]) if len(xt) > 1 else 1.0
+    for xv in xt:
+        xp = l + (r - l) * xv / (_w if _w else 1.0)
         p.append(f'<text x="{xp:.1f}" y="{b + 20}" fill="{UI.MUTED}" '
                  f'font-family="{_FONT}" font-size="15" text-anchor="middle">'
-                 f'{xv:.0f}</text>')
+                 f'{_fmt(xv, xs)}</text>')
     p.append(f'<text x="{(l + r) / 2:.0f}" y="{h - 10}" fill="{UI.MUTED}" '
              f'font-family="{_SANS}" font-size="15" text-anchor="middle">'
              f'{_esc(xlabel)}</text>')

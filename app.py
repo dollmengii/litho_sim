@@ -204,8 +204,12 @@ with sb.expander("광학 조건", expanded=True):
         format_func=lambda v: f"{v:.2f}  ({'공기 (dry)' if v == 1.0 else '물 (ArF immersion)'})",
     )
     na = st.slider("개구수 NA", 0.10, 1.60, 1.35, 0.01)
-    k1 = st.slider("공정 상수 k1", 0.25, 0.80, 0.288, 0.001)
-    k2 = st.slider("공정 상수 k2", 0.20, 1.50, 0.745, 0.005)
+    # [13차 보완 98 번] 자릿수를 3 으로 올린다. 기본값이 0.288 / 0.745 인데
+    # 기본 서식(%.2f)이 0.29 / 0.74 로 보여 주어, 화면에 적힌 값을 식에
+    # 넣어 검산하면 지표 카드의 숫자(41.2 nm)가 재현되지 않았다. 간격은
+    # 이미 0.001 / 0.005 이므로 표시 자릿수만 모자랐던 것이다.
+    k1 = st.slider("공정 상수 k1", 0.25, 0.80, 0.288, 0.001, format="%.3f")
+    k2 = st.slider("공정 상수 k2", 0.20, 1.50, 0.745, 0.005, format="%.3f")
 
 with sb.expander("조명 조건", expanded=True):
     src_type = st.radio("광원 형상",
@@ -341,7 +345,9 @@ except ValueError as exc:
 sampling = G.check_sampling(sim_grid, wavelength, na, sigma_out)
 
 try:
-    rayleigh = OP.rayleigh_summary(wavelength, na, n_medium, k1, k2, k2,
+    # [13차 보완 96 번] k3 자리에 k2 를 그대로 넘기고 있었다. 이제 넘기지
+    # 않는다. optics 가 k3 = k2/2 로 유도한다.
+    rayleigh = OP.rayleigh_summary(wavelength, na, n_medium, k1, k2,
                                    polarization=polarization)
 except ValueError as exc:
     st.error(str(exc))
@@ -423,6 +429,21 @@ c4.metric(
     delta=f"{cd_result['cd'] - cd_nm:+.2f} nm" if cd_result["formed"] else None,
 )
 
+# [13차 보완 96 번] 고NA 값이 근축값보다 **작은 것이 정상**이다. 읽는
+# 사람은 보통 반대로 기대하므로 한 줄로 밝혀 둔다. 9~12주차에는 이 값이
+# 근축값의 4 배로 나와 '+169.6 %' 로 표시되었고, 그 표시에 아무도 의문을
+# 달지 않은 것이 이 줄을 넣는 이유다.
+if rayleigh.get("dof_ratio"):
+    _over = (1.0 / rayleigh["dof_ratio"] - 1.0) * 100.0
+    st.caption(
+        f"두 DOF 는 같은 광로차 기준을 서로 다르게 정규화한 것이므로 계수가 "
+        f"다르다 (k2 = {rayleigh['k2_used']:.3f}, k3 = k2/2 = "
+        f"{rayleigh['k3_used']:.3f}). 고NA 식이 그 기준을 근사 없이 푼 값이고, "
+        f"근축 식은 이 조건에서 {_over:+.1f}% 과대평가한다. 둘 다 Rayleigh "
+        f"꼴의 축척 관계이므로 실제 초점 여유는 CD 허용오차와 EL 기준에 따라 "
+        f"달라진다. '공정 윈도' 탭의 측정 DOF 와 함께 읽을 것."
+    )
+
 tab1, tab2, tab3, tab5, tab6, tab8, tab7, tab4 = st.tabs(
     ["마스크 패턴", "공간 광강도", "현상 후 패턴", "공정 윈도",
      "확률 모델", "식별 가능성", "데이터셋", "진단"]
@@ -436,7 +457,11 @@ with tab1:
     ), unsafe_allow_html=True)
     st.markdown(CH.strip(
         _t, sim_grid.field_width, h=150,
-        label="마스크 (위에서 본 모습)",
+        # [13차 보완 99 번] 예전 matplotlib 판은 같은 1 차원 단면을 y 로
+        # 복제해 2 차원 그림으로 띄웠다. 그래서 y 축이 있었지만 거기에는
+        # 아무 정보도 없었다. 띠로 바꾸면서 y 축이 사라졌으므로, 라벨이
+        # 그 사실을 말하게 한다. 실제 2 차원 결과는 '확률 모델' 탭에 있다.
+        label="마스크 (위에서 본 모습 · y 방향 균일)",
     ), unsafe_allow_html=True)
     st.markdown(UI.chips([
         ("CD", f"{cd_nm:.1f}", "nm"),
@@ -488,7 +513,7 @@ with tab3:
     profile = RS.resist_profile(intensity_dosed, threshold, tone)
     st.markdown(CH.strip(
         profile, sim_grid.field_width, h=160, on=UI.RESIST,
-        label="현상 후 남은 레지스트 (위에서 본 모습)",
+        label="현상 후 남은 레지스트 (위에서 본 모습 · y 방향 균일)",
     ), unsafe_allow_html=True)
     st.markdown(CH.line(
         [(sim_grid.x, profile, UI.RESIST, "", True)],
