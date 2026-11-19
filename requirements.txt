@@ -9,3 +9,8 @@ scikit-learn>=1.3
 # 의존성으로 함께 깔리기는 하지만, 우리 코드가 직접 쓰는 것은 전이 의존성에
 # 기대지 않고 명시한다(validate_w8 Case 3 이 이것을 잡아냈다).
 joblib>=1.2
+
+# 14주차 : 결과 내보내기(export.py). PDF 는 reportlab 의 **내장 CID 글꼴**로
+# 한글을 그리므로 글꼴 파일을 배포에 넣지 않아도 깨지지 않는다.
+openpyxl>=3.1
+reportlab>=4.0

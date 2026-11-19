@@ -14,6 +14,7 @@ import numpy as np
 import streamlit as st
 
 import charts as CH
+import export as EX
 import ui as UI
 
 from litho import grid as G
@@ -631,7 +632,7 @@ with tab5:
                 fige, axe = plt.subplots(figsize=(4.6, 3.6))
                 axe.plot([r["el"] for r in res["curve"]],
                          [r["dof"] for r in res["curve"]], "o-", lw=1.4, ms=3)
-                axe.axvline(el_target, color="crimson", ls=":", lw=1.0)
+                axe.axvline(el_target, color=UI.AMBER, ls=":", lw=1.2)
                 axe.set_xlabel("Exposure Latitude [%]")
                 axe.set_ylabel("DOF [nm]")
                 axe.set_title("EL - DOF trade-off")
@@ -643,6 +644,63 @@ with tab5:
                 f"측정 DOF {d5:.0f} nm 로부터 역산한 k2 = {k2m:.3f} 입니다. "
                 f"해석식 기준값(입력 k2 = {k2:.3f})과의 차이는 Rayleigh 상수가 "
                 "조명 조건 및 k1 에 의존하기 때문입니다."
+            )
+
+            # --- 내려받기 -------------------------------------------------
+            # 화면에 **보이는 문자열 그대로** 넘긴다. 여기서 다시 반올림하면
+            # 화면과 문서의 숫자가 어긋난다(11 차 보완 37 번과 같은 유형).
+            st.markdown(UI.section("내려받기"), unsafe_allow_html=True)
+            _bundle = EX.build(
+                conditions=[
+                    ("파장", f"{wavelength:.1f}", "nm"),
+                    ("개구수 NA", f"{na:.3f}", ""),
+                    ("매질 굴절률", f"{n_medium:.3f}", ""),
+                    ("조명 sigma_out", f"{sigma_out:.3f}", ""),
+                    ("조명 sigma_in", f"{sigma_in:.3f}", ""),
+                    ("피치", f"{pitch:.1f}", "nm"),
+                    ("duty", f"{duty:.3f}", ""),
+                    ("목표 CD", f"{res['target']:.2f}", "nm"),
+                    ("임계값", f"{threshold:.3f}", ""),
+                    ("CD 공차", f"{cd_tol * 100:.1f}", "%"),
+                    ("EL 기준", f"{el_target:.0f}", "%"),
+                    ("초점 격자", f"{n_focus}", "점"),
+                    ("노광 격자", f"{n_dose}", "점"),
+                    ("초점 범위", f"±{dz_range:.0f}", "nm"),
+                    ("노광 범위", f"±{dose_span * 100:.0f}", "%"),
+                ],
+                results=[
+                    (f"DOF @ EL {el_target:.0f}% (하한)", f"{d5:.0f}", "nm"),
+                    ("DOF 상한", f"{d5_up:.0f}", "nm"),
+                    ("dose-to-size E_op", f"{res['e_op']:.4f}", ""),
+                    ("역산 k2 (하한)", f"{k2m:.3f}", ""),
+                    ("PW 격자점",
+                     f"{int(res['pw'].sum())} / {res['pw'].size}", ""),
+                    ("입력 k2", f"{k2:.3f}", ""),
+                ],
+                verdict="통과" if int(res["pw"].sum()) else "위반",
+                grid=(res["dz"], res["doses"] / res["e_op"], res["pw"]),
+                note=("DOF 는 구간으로 읽습니다. 격자화 편향이 초점과 노광 "
+                      "양쪽에서 오므로 하한만 적으면 참값이 0 으로 보일 수 "
+                      "있습니다."),
+            )
+            _d1, _d2, _d3 = st.columns([1, 1, 2])
+            _d1.download_button(
+                "PDF 한 장", EX.to_pdf(_bundle),
+                file_name=f"공정윈도_{_bundle['code']}.pdf",
+                mime="application/pdf", type="primary",
+                use_container_width=True,
+            )
+            _d2.download_button(
+                "Excel", EX.to_xlsx(_bundle),
+                file_name=f"공정윈도_{_bundle['code']}.xlsx",
+                mime=("application/vnd.openxmlformats-officedocument"
+                      ".spreadsheetml.sheet"),
+                use_container_width=True,
+            )
+            _d3.caption(
+                f"결과 코드 **{_bundle['code']}** — 같은 조건이면 같은 코드가 "
+                "나옵니다. PDF 는 한 장 요약이고, Excel 에는 공정 윈도 격자 "
+                "전체가 들어 있습니다."
             )
     else:
         st.info("버튼을 눌러 스윕을 실행하세요. 현재 설정 기준 수 초가 소요됩니다.")

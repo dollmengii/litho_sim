@@ -1,11 +1,15 @@
 [theme]
-# 계측 장비 화면에 가깝게. 그래프가 대부분이라 바탕을 낮추면 선과 값이
-# 떠오른다. 색을 고른 근거는 ui.py 의 설명에 적어 두었다.
-base = "dark"
-primaryColor = "#58A6FF"
-backgroundColor = "#0E1116"
-secondaryBackgroundColor = "#161A21"
-textColor = "#C9D1D9"
+# 14 주차에 어두운 '계측 장비' 풍에서 바꾸었다. 색은 공정에서 가져왔다 --
+# 클린룸이 노란 조명인 이유는 레지스트가 청색·자외선에 반응하기 때문이고,
+# ArF 는 193 nm 심자외선이다. 그래서 바탕은 따뜻한 종이색, 강조는 자외선
+# 보라다. 근거와 규칙은 ui.py 의 설명에 적어 두었다.
+# 이 값들은 ui.py 의 BG/SURF/TXT/ACCENT 와 **같아야 한다.** 둘이 어긋나면
+# Streamlit 기본 위젯만 옛 색으로 남는다.
+base = "light"
+primaryColor = "#5B2BD9"
+backgroundColor = "#FBF9F4"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#15131A"
 
 [server]
 headless = true

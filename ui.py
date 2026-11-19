@@ -6,22 +6,33 @@
 간격은 한곳에 모아 두고 바꾸는 편이 낫다. 수치 자체는 여기서 건드리지
 않는다.
 
-설계 방침 : 계측 장비의 화면처럼
---------------------------------
-이 화면의 독자는 조건을 바꿔 가며 숫자를 읽는 사람이다. 그래서 꾸밈보다
-**판독성**을 앞에 둔다.
+설계 방침 : 주제에서 나온 색, 활자 위주의 구조
+----------------------------------------------
+14 주차에 어두운 '계측 장비' 풍에서 바꾸었다. 바꾼 이유와 규칙을 적어 둔다.
 
-- **숫자는 고정폭 글꼴로.** 조건을 바꾸면 값이 바뀌는데, 비례폭 글꼴은
-  자릿수가 달라질 때마다 글자가 좌우로 밀려 비교가 어렵다. 고정폭이면
-  자리가 고정되어 변화만 눈에 들어온다.
-- **단위는 흐리게.** `193.0 nm` 에서 읽어야 하는 것은 193.0 이다. 단위를
-  같은 밝기로 두면 눈이 매번 단위까지 훑는다.
-- **어두운 바탕.** 그래프가 대부분이고 흰 바탕에서는 그래프 영역만
-  밝아 시선이 분산된다. 바탕을 낮추면 선과 값이 떠오른다.
-- **테두리는 1 px 한 겹만.** 그림자와 둥근 모서리를 키우면 카드가
-  떠 보이고 밀도가 떨어진다. 한 겹 선으로 영역만 가른다.
-- **여백을 줄임.** 기본 설정은 한 화면에 들어오는 정보가 적다. 위아래
-  여백을 줄여 조건과 결과를 같은 화면에서 본다.
+**색은 공정에서 가져왔다.** 클린룸이 노란 조명인 이유는 레지스트가 청색과
+자외선에 반응하기 때문이고, ArF 는 193 nm 심자외선이다. 그래서
+
+- 바탕은 따뜻한 종이색(클린룸 황색등)
+- 강조는 **자외선 보라**
+- 레지스트·임계값은 **클린룸 앰버**
+
+로 두었다. 임의로 고른 파랑이 아니라 이 과제가 다루는 물리에서 나온
+배색이므로, 발표에서 한 문장으로 설명할 수 있다.
+
+**판정 세 값은 색상만이 아니라 밝기로도 가른다.** 통과(보라) · 판정 불가
+(회색) · 위반(앰버)이다. 빨강·초록으로 가르면 색각 이상에서 구분되지
+않는다. 세 색의 명도가 서로 다르므로 흑백으로 인쇄해도 구별된다.
+
+**카드 그림자 대신 머리카락 굵기 선.** 그림자와 큰 모서리를 쓰면 카드가
+떠 보이고 한 화면의 정보 밀도가 떨어진다. 1 px 선과 여백으로만 가른다.
+
+**숫자는 고정폭.** 조건을 바꾸면 값이 바뀌는데 비례폭은 자릿수가 달라질
+때마다 글자가 좌우로 밀려 비교가 어렵다. 고정폭이면 자리가 고정되어
+변화만 눈에 들어온다. '공대생 같다' 는 인상은 고정폭 때문이 아니라
+어두운 크롬과 matplotlib 기본값 때문이었다.
+
+**단위는 흐리게.** `193.0 nm` 에서 읽어야 하는 것은 193.0 이다.
 """
 
 from __future__ import annotations
@@ -29,25 +40,41 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 
 #: 색. 한곳에서만 고친다.
-BG = "#0E1116"          # 바탕
-SURF = "#161A21"        # 카드·사이드바
-LINE = "#262C36"        # 테두리 (한 겹)
-TXT = "#C9D1D9"         # 본문
-MUTED = "#8B949E"       # 단위·설명
-ACCENT = "#58A6FF"      # 강조 (파랑)
-OK = "#3FB950"
-WARN = "#D29922"
-BAD = "#F85149"
+BG = "#FBF9F4"          # 바탕 (클린룸 황색등을 아주 옅게)
+SURF = "#FFFFFF"        # 면 (카드·사이드바)
+LINE = "#E7E2D8"        # 머리카락 굵기 선
+TXT = "#15131A"         # 본문 (보라가 살짝 도는 먹)
+MUTED = "#5C5768"       # 단위·설명 (바탕 대비 5.6:1, 작은 글씨도 읽힌다)
+ACCENT = "#5B2BD9"      # 강조 — 심자외선 보라
+AMBER = "#B4600E"       # 신호 — 클린룸 황색등
 
-# 차트 색. `charts.py` 가 쓴다. 브라우저판과 같은 이름·같은 값으로 두어
-# 두 화면이 형제처럼 보이게 한다.
+#: 판정 세 값. 색상과 **밝기**가 모두 다르다.
+PASS = ACCENT
+UNDET = MUTED
+VIOL = AMBER
+#: 판정 알약의 바탕
+PASS_BG = "#EFEAFD"
+UNDET_BG = "#EFEDE7"
+VIOL_BG = "#FBF0DE"
+
+#: 옛 이름. 바깥에서 쓰지 않지만 지우면 남의 코드가 깨지므로 남긴다.
+OK, WARN, BAD = PASS, VIOL, "#6B2545"
+
+# 차트 색. `charts.py` 가 쓴다. 세 색의 **명도가 서로 다르므로** 흑백으로
+# 인쇄해도 구별된다. 색상만으로 가르면 색각 이상에서 겹친다.
 FG = TXT                # 본문과 같은 밝기
-BEAM = "#4FD1E0"        # 광강도 (청록)
-RESIST = "#F0A33C"      # 임계 · 레지스트 (호박)
-SPEC = "#8B9DF7"        # 규격 띠 (남보라)
+BEAM = ACCENT           # 광강도 — 자외선 보라
+RESIST = AMBER          # 임계 · 레지스트 — 앰버 (실제 레지스트 색이다)
+SPEC = "#2F6F6B"        # 규격 띠 — 청록. 위 둘과 색상·명도가 모두 다르다
 
-#: 숫자용 고정폭 글꼴. 한글은 여기 없으므로 본문 글꼴이 이어받는다.
-MONO = "'JetBrains Mono', 'IBM Plex Mono', 'Consolas', monospace"
+#: 글꼴. 한글이 있는 산세리프와 짝이 되는 고정폭을 함께 쓴다.
+SANS = "'IBM Plex Sans KR', system-ui, -apple-system, sans-serif"
+MONO = "'IBM Plex Mono', 'Consolas', monospace"
+
+#: 웹 글꼴 주소. `css()` 와 내보내기 쪽이 같이 쓴다.
+FONT_URL = ("https://fonts.googleapis.com/css2?"
+            "family=IBM+Plex+Mono:wght@400;500;600&"
+            "family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap")
 
 
 def css() -> str:
@@ -59,48 +86,53 @@ def css() -> str:
     """
     return f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('{FONT_URL}');
 
 :root {{
   --bg:{BG}; --surf:{SURF}; --line:{LINE};
-  --txt:{TXT}; --muted:{MUTED}; --accent:{ACCENT};
+  --txt:{TXT}; --muted:{MUTED}; --accent:{ACCENT}; --amber:{AMBER};
 }}
 
-/* 위아래 여백을 줄여 조건과 결과를 같은 화면에 둔다 */
-.block-container {{ padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1500px; }}
+html, body, [data-testid="stAppViewContainer"] {{
+  background: var(--bg); color: var(--txt);
+  font-family: {SANS};
+}}
 
-/* 제목 : 크기를 낮추고 자간을 좁힌다. 장비 화면의 표제에 가깝게 */
-h1 {{ font-size: 1.45rem !important; letter-spacing: -0.02em; margin-bottom: .1rem; }}
-h2 {{ font-size: 1.08rem !important; letter-spacing: -0.01em; }}
-h3 {{ font-size: .96rem !important; }}
+.block-container {{ padding-top: 2.4rem; padding-bottom: 4rem; max-width: 1500px; }}
+
+/* 제목 : 굵고 자간을 좁혀 또렷하게. 설명은 한 단계 낮춘다 */
+h1 {{
+  font-size: 1.9rem !important; font-weight: 700;
+  letter-spacing: -0.03em; margin-bottom: .2rem; color: var(--txt);
+}}
+h2 {{ font-size: 1.05rem !important; font-weight: 600; letter-spacing: -0.01em; }}
+h3 {{ font-size: .94rem !important; font-weight: 600; }}
 
 /* 숫자는 고정폭. 자릿수가 바뀌어도 자리가 밀리지 않는다 */
 [data-testid="stMetricValue"] {{
-  font-family: {MONO}; font-size: 1.32rem; font-weight: 500;
-  letter-spacing: -0.01em; color: var(--txt);
+  font-family: {MONO}; font-size: 1.6rem; font-weight: 500;
+  letter-spacing: -0.02em; color: var(--txt);
 }}
 [data-testid="stMetricLabel"] {{
-  font-size: .70rem; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .07em;
+  font-size: .74rem; color: var(--muted); letter-spacing: 0;
+  text-transform: none; font-weight: 400;
 }}
-[data-testid="stMetricDelta"] {{ font-family: {MONO}; font-size: .78rem; }}
+[data-testid="stMetricDelta"] {{ font-family: {MONO}; font-size: .76rem; }}
 
-/* 지표 카드 : 테두리 한 겹. 그림자 없음 */
+/* 지표 카드 : 흰 면에 선 한 겹. 그림자 없음 */
 [data-testid="stMetric"] {{
   background: var(--surf); border: 1px solid var(--line);
-  border-radius: 6px; padding: .65rem .85rem;
+  border-radius: 10px; padding: .85rem 1rem;
 }}
 
-/* 탭 : 알약 대신 밑줄. 개발 도구의 탭 모양 */
-.stTabs [data-baseweb="tab-list"] {{
-  gap: .15rem; border-bottom: 1px solid var(--line);
-}}
+/* 탭 : 알약 대신 밑줄 */
+.stTabs [data-baseweb="tab-list"] {{ gap: .1rem; border-bottom: 1px solid var(--line); }}
 .stTabs [data-baseweb="tab"] {{
-  height: 2.2rem; padding: 0 .9rem; font-size: .84rem;
+  height: 2.4rem; padding: 0 .95rem; font-size: .86rem;
   color: var(--muted); border-radius: 0;
 }}
 .stTabs [aria-selected="true"] {{
-  color: var(--txt) !important;
+  color: var(--txt) !important; font-weight: 600;
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }}
 
@@ -114,55 +146,87 @@ section[data-testid="stSidebar"] .stSelectbox label {{
   font-size: .78rem !important; color: var(--txt);
 }}
 section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {{
-  font-size: .78rem; margin-bottom: .1rem;
+  font-size: .78rem; margin-bottom: .1rem; color: var(--muted);
 }}
-/* 슬라이더가 보여 주는 현재값도 고정폭으로 */
 section[data-testid="stSidebar"] [data-testid="stTickBarMin"],
 section[data-testid="stSidebar"] [data-testid="stTickBarMax"],
 section[data-testid="stSidebar"] [role="slider"] {{
   font-family: {MONO}; font-size: .70rem;
 }}
-section[data-testid="stSidebar"] .stSlider {{ padding-bottom: .15rem; }}
+section[data-testid="stSidebar"] .stSlider {{ padding-bottom: .2rem; }}
 
-/* 접힘 머리말 : 구역 이름이므로 작게, 대문자 자간으로 */
-[data-testid="stExpander"] summary p {{
-  font-size: .76rem; text-transform: uppercase;
-  letter-spacing: .08em; color: var(--muted);
+/* 단추 : 주 동작만 채우고 나머지는 선 */
+.stButton button, .stDownloadButton button {{
+  font-family: {SANS}; font-size: .84rem; font-weight: 500;
+  border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surf); color: var(--txt); padding: .45rem 1rem;
 }}
-[data-testid="stExpander"] {{ border-color: var(--line) !important; }}
+.stButton button:hover, .stDownloadButton button:hover {{
+  border-color: var(--accent); color: var(--accent);
+}}
+.stButton button[kind="primary"], .stDownloadButton button[kind="primary"] {{
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}}
 
-/* 설명문 : 본문보다 한 단계 낮춘다 */
-[data-testid="stCaptionContainer"] p {{ color: var(--muted); font-size: .78rem; }}
+/* 접힘 머리말 : 구역 이름이므로 작게 */
+[data-testid="stExpander"] summary p {{
+  font-size: .80rem; letter-spacing: 0; color: var(--muted); font-weight: 500;
+}}
+[data-testid="stExpander"] {{
+  border-color: var(--line) !important; border-radius: 10px !important;
+  background: var(--surf);
+}}
+
+/* 설명문 */
+[data-testid="stCaptionContainer"] p {{
+  color: var(--muted); font-size: .79rem; line-height: 1.65;
+}}
 
 /* 표 : 숫자 칸을 고정폭으로 */
 [data-testid="stDataFrame"] {{ font-family: {MONO}; font-size: .80rem; }}
 
-/* 알림 상자 : 좌측 띠만 남기고 배경을 낮춘다 */
+/* 알림 상자 : 색 띠를 왼쪽 2 px 로만 남기고 바탕은 흰 면.
+   22 개가 알록달록하면 정작 중요한 숫자가 묻힌다 */
 [data-testid="stAlert"] {{
   background: var(--surf); border: 1px solid var(--line);
-  border-left-width: 3px; border-radius: 4px;
+  border-left: 2px solid var(--muted); border-radius: 8px;
+  color: var(--txt);
+}}
+[data-testid="stAlert"] p {{ font-size: .82rem; line-height: 1.65; }}
+div[data-baseweb="notification"][kind="info"],
+[data-testid="stAlert"]:has(svg[data-testid="stInfoIcon"]) {{
+  border-left-color: var(--accent);
+}}
+[data-testid="stAlert"]:has(svg[data-testid="stWarningIcon"]),
+[data-testid="stAlert"]:has(svg[data-testid="stErrorIcon"]) {{
+  border-left-color: var(--amber);
 }}
 
-/* 구분선 */
-hr {{ border-color: var(--line); margin: .9rem 0; }}
+hr {{ border-color: var(--line); margin: 1.1rem 0; }}
 
 /* 아래 정의한 보조 요소들 */
-.k-unit {{ color: var(--muted); font-size: .78em; margin-left: .18em; }}
-.k-bar {{
-  display: flex; gap: .4rem; flex-wrap: wrap;
-  margin: .1rem 0 .9rem 0;
-}}
+.k-unit {{ color: var(--muted); font-size: .78em; margin-left: .2em; }}
+.k-bar {{ display: flex; gap: .4rem; flex-wrap: wrap; margin: .2rem 0 1rem 0; }}
 .k-chip {{
-  font-family: {MONO}; font-size: .72rem; color: var(--muted);
+  font-family: {MONO}; font-size: .73rem; color: var(--muted);
   background: var(--surf); border: 1px solid var(--line);
-  border-radius: 4px; padding: .14rem .5rem;
+  border-radius: 999px; padding: .2rem .65rem;
 }}
 .k-chip b {{ color: var(--txt); font-weight: 500; }}
 .k-sec {{
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
-  color: var(--muted); border-bottom: 1px solid var(--line);
-  padding-bottom: .3rem; margin: .4rem 0 .7rem 0;
+  font-size: .74rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); font-family: {MONO}; font-weight: 500;
+  margin: 1.2rem 0 .35rem 0;
 }}
+.k-pill {{
+  display: inline-block; font-size: .76rem; font-weight: 600;
+  border-radius: 999px; padding: .18rem .6rem;
+}}
+.k-motif {{
+  display: flex; height: 40px; border-radius: 8px;
+  overflow: hidden; border: 1px solid var(--line); margin: .3rem 0;
+}}
+.k-motif > div {{ flex: 1; }}
 </style>
 """
 
@@ -182,43 +246,85 @@ def chips(items) -> str:
 
 
 def section(title: str) -> str:
-    """구역 머리말. `st.subheader` 보다 낮은 단계로 쓴다."""
+    """구역 머리말. 파란 대문자 머리표 자리에 보라 고정폭으로 쓴다."""
     return f'<div class="k-sec">{title}</div>'
 
 
-def mpl_dark() -> None:
+def pill(text: str, kind: str = "undet") -> str:
+    """판정 알약. kind 는 pass / undet / viol.
+
+    세 값의 **명도가 서로 다르다.** 흑백으로 인쇄해도 구별되고, 색각 이상
+    에서도 구별된다. 빨강·초록 짝을 쓰지 않은 이유가 그것이다.
+    """
+    fg, bg = {
+        "pass": (PASS, PASS_BG),
+        "viol": (VIOL, VIOL_BG),
+    }.get(kind, (UNDET, UNDET_BG))
+    return (f'<span class="k-pill" style="color:{fg};background:{bg}">'
+            f'{text}</span>')
+
+
+def motif(blurs=(3.0, 1.7, 0.8, 0.0), pitch=16, line=7) -> str:
+    """초점이 맞아 들어가는 선-공간 패턴.
+
+    돌아가는 고리 대신 쓴다. 흐릿하던 패턴이 또렷해지는 것이 이 과제가
+    실제로 재는 일이다. 장식이 아니라 주제의 그림이다.
+    """
+    # 흐림이 줄 너비보다 크면 선이 아예 지워져 회색 얼룩이 된다. 줄을
+    # 넓게 두고 흐림을 그보다 작게 잡는다 (실제로 지워져서 고친 값이다).
+    cells = "".join(
+        f'<div style="background:repeating-linear-gradient('
+        f'90deg,{TXT} 0 {line}px,{BG} {line}px {pitch}px);'
+        f'filter:blur({b}px)"></div>'
+        for b in blurs)
+    return f'<div class="k-motif" aria-hidden="true">{cells}</div>'
+
+
+def mpl_theme() -> None:
     """그래프를 화면과 같은 바탕으로 맞춘다.
 
     **글꼴 계열은 건드리지 않는다.** `app._set_korean_font()` 가 먼저
     정한 한글 글꼴을 덮으면 축 이름이 네모로 나온다. 여기서는 색과 선
     굵기만 정한다.
+
+    위·오른쪽 테두리를 없애고 격자를 아주 연하게 두는 것이 matplotlib
+    기본값과 가장 크게 갈리는 지점이다. 기본값의 사방 테두리가 '논문
+    그림' 인상을 만든다.
     """
     plt.rcParams.update({
-        "figure.facecolor": SURF,
+        "figure.facecolor": BG,
         "axes.facecolor": BG,
-        "savefig.facecolor": SURF,
+        "savefig.facecolor": BG,
         "axes.edgecolor": LINE,
-        "axes.labelcolor": TXT,
+        "axes.labelcolor": MUTED,
         "axes.titlecolor": TXT,
         "text.color": TXT,
         "xtick.color": MUTED,
         "ytick.color": MUTED,
         "grid.color": LINE,
-        "grid.alpha": 0.8,
+        "grid.alpha": 0.9,
         "axes.grid": True,
         "axes.spines.top": False,
         "axes.spines.right": False,
         "legend.facecolor": SURF,
         "legend.edgecolor": LINE,
         "legend.labelcolor": TXT,
+        "legend.frameon": True,
+        # 여섯 색의 **명도가 서로 다르다**. 색상만으로 가르지 않는다.
         "axes.prop_cycle": plt.cycler(
-            color=[ACCENT, "#F778BA", OK, WARN, "#A371F7", BAD]),
+            color=[ACCENT, AMBER, SPEC, "#6B2545", "#8A7CC2", "#4F5B33"]),
         "font.size": 9,
         "axes.titlesize": 10,
         "axes.labelsize": 9,
         "xtick.labelsize": 8,
         "ytick.labelsize": 8,
         "legend.fontsize": 8,
-        "lines.linewidth": 1.6,
+        "lines.linewidth": 1.8,
         "figure.autolayout": True,
     })
+
+
+#: 옛 이름. `app.py` 가 이 이름으로 부른다. 이름만 남기고 내용은 위와 같다.
+#: (바탕이 더 이상 어둡지 않으므로 이름이 사실과 다르지만, 부르는 쪽을
+#:  같이 고치지 않으면 조용히 서식이 빠진다. 이름은 15 주차에 정리한다.)
+mpl_dark = mpl_theme

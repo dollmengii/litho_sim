@@ -226,8 +226,15 @@ def line(series, *, h=330, xlabel="", ylabel="", hline=None, hlabel="",
     return _open(h) + "".join(p) + "</svg>"
 
 
+#: 띠의 **빈 칸** 색. 14 주차에 바탕이 밝아졌으므로 여기도 같이 바뀐다.
+#: 예전에는 `#05070B` 를 직접 적어 두었는데, 어두운 바탕에서만 맞는 값이라
+#: 밝은 바탕에서는 칸이 새카맣게 나왔다. `ui.py` 에서 받아 둘이 어긋날 수
+#: 없게 한다(54·109·114 번과 같은 규칙 -- 구할 수 있는 값을 다시 적지 않는다).
+STRIP_OFF = UI.BG
+
+
 def strip(values, width_nm, *, h=150, xlabel="x [nm]", on=UI.FG,
-          off="#05070B", label=""):
+          off=STRIP_OFF, label=""):
     """위에서 내려다본 패턴 띠. 0/1 값을 사각형으로 그린다.
 
     `imshow` 대신 쓰는 이유 : 픽셀 그림은 확대하면 뭉개지고 가장자리가
