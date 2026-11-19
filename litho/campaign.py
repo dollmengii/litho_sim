@@ -122,6 +122,27 @@ def feasible_region(
     else:
         bounds = {"defocus": (0.0, 0.0), "dose_rel": (1.0, 1.0)}
 
+    # [14 차 보완 107 번] **형성 경계**도 같이 낸다.
+    #
+    # 적격 경계(`bounds`)는 품질 문턱까지만이다. 그 안에서만 표본을 뽑으면
+    # 학습 데이터에 **품질 미달 행이 한 건도 없고**, 그 모형에게 품질
+    # 판정을 시키게 된다. 경계의 한쪽만 보고 경계를 판정하라는 것이다.
+    # 103 번(음수 NILS)이 그 결과였다.
+    #
+    # 형성 경계는 `nils_map` 이 유한한 곳이다. `screen_condition` 이
+    # 미형성과 dose-to-size 실패에만 NaN 을 주고, 품질 미달에는 실제 NILS
+    # 를 주기 때문이다. 즉 **임의로 고른 여유 폭이 필요 없다.** 경계가
+    # 물리(라벨이 정의되는가)로 정해진다.
+    formed = np.isfinite(nils_map)
+    if formed.any():
+        fi, fj = np.where(formed)
+        formed_bounds = {
+            "defocus": (float(dzs[fj.min()]), float(dzs[fj.max()])),
+            "dose_rel": (float(drs[fi.min()]), float(drs[fi.max()])),
+        }
+    else:
+        formed_bounds = dict(bounds)
+
     n_probe = n_coarse ** 2
 
     # 적격 영역이 격자 간격보다 좁아 경계가 퇴화한 경우 범위를 좁혀 재탐색
@@ -142,12 +163,22 @@ def feasible_region(
             sub["n_probe"] += n_probe
             sub["elapsed_s"] += elapsed
             sub["refined"] = True
+            # 재탐색은 범위를 좁혀 다시 쓴 것이므로 형성 경계는 **넓은 쪽**
+            # 과 합집합을 취한다. 좁힌 창에서 본 것만 남기면 바깥의 형성
+            # 영역을 잃는다.
+            sb = sub.get("formed_bounds") or formed_bounds
+            sub["formed_bounds"] = {
+                k: (min(sb[k][0], formed_bounds[k][0]),
+                    max(sb[k][1], formed_bounds[k][1]))
+                for k in ("defocus", "dose_rel")}
             return sub
 
     return {
         "defocus_axis": dzs, "dose_axis": drs,
         "pass_map": grid_pass, "nils_map": nils_map,
-        "bounds": bounds,
+        "formed_map": formed,
+        "bounds": bounds, "formed_bounds": formed_bounds,
+        "formed_rate": float(formed.mean()),
         "pass_rate": float(grid_pass.mean()),
         "n_probe": n_probe,
         "elapsed_s": elapsed,
@@ -161,10 +192,30 @@ def design_grid(
     n_defocus: int = 9,
     n_dose: int = 9,
     margin: float = 0.05,
+    extent: str = "pass",
 ) -> list[DS.SampleSpec]:
-    """적격 영역 안에서만 조건 격자를 구성한다."""
-    dz_lo, dz_hi = region["bounds"]["defocus"]
-    dr_lo, dr_hi = region["bounds"]["dose_rel"]
+    """조건 격자를 구성한다.
+
+    extent
+    ------
+    ``"pass"``   적격 영역 안에서만 (13 주차까지의 설계).
+    ``"formed"`` **패턴이 형성되는 영역 전체**. [14 차 보완 107 번]
+
+    왜 ``"formed"`` 가 필요한가
+    ---------------------------
+    ``"pass"`` 로 뽑으면 학습 데이터에 품질 미달 행이 **한 건도 없다.**
+    그 모형에게 품질 판정을 시키면 경계의 한쪽만 보고 경계를 긋는 셈이다.
+    103 번(음수 NILS 예측 60.2 %)이 그 결과였다.
+
+    ``"formed"`` 의 경계는 임의로 고른 여유 폭이 아니라 **라벨이 물리적으로
+    정의되는 한계**다. 미형성 영역에는 CD 가 없고 따라서 NILS 도 없다.
+    그 영역은 회귀로는 끝내 배울 수 없고, 형성 여부 **분류**로만 덮인다
+    (108 번).
+    """
+    key = "formed_bounds" if extent == "formed" else "bounds"
+    bb = region.get(key) or region["bounds"]
+    dz_lo, dz_hi = bb["defocus"]
+    dr_lo, dr_hi = bb["dose_rel"]
     dz_pad = (dz_hi - dz_lo) * margin
     dr_pad = (dr_hi - dr_lo) * margin
 
@@ -256,8 +307,19 @@ def plan_campaign(
     n_workers: int | None = None,
     progress=None,
     conditions: list[dict] | None = None,
+    extent: str = "pass",
+    keep_screen_maps: bool = False,
 ) -> dict:
     """다차원 조건 공간 전체에 대한 생성 계획을 수립한다.
+
+    extent / keep_screen_maps
+    -------------------------
+    [14 차 보완 107·108 번] ``extent="formed"`` 는 격자를 **패턴이 형성되는
+    영역 전체**로 넓힌다. ``keep_screen_maps=True`` 는 사전 탐색이 쓸어 본
+    형성 여부 맵을 버리지 않고 모은다. 그 맵은 이미 계산되고 있었고 경계
+    상자만 남긴 채 버려지던 것이라 **추가 연산이 0** 이다. 미형성 영역은
+    회귀 라벨이 없어 끝내 배울 수 없지만, **형성 여부 자체는 모든 점에서
+    정해지므로 분류로 덮을 수 있다.**
 
     광학 조건마다 적격 Defocus·Dose 영역이 다르므로, 조합별로
     사전 탐색을 수행한 뒤 해당 영역 안에서만 격자를 구성한다.
@@ -276,6 +338,8 @@ def plan_campaign(
     optics = (list(conditions) if conditions is not None
               else sample_optical_conditions(n_optical, space, seed))
     specs, regions, skipped = [], [], 0
+    screen_rows: list[np.ndarray] = []
+    screen_formed: list[np.ndarray] = []
     t0 = time.perf_counter()
 
     if n_workers is None:
@@ -284,12 +348,32 @@ def plan_campaign(
 
     def _collect(opt, reg):
         nonlocal skipped
-        if reg is None or reg["pass_rate"] == 0.0:
+        if reg is None:
             skipped += 1
             return
         local = DS.SampleSpec(**{**base.__dict__, **opt})
-        specs.extend(design_grid(local, reg, n_defocus, n_dose))
+        # [108 번] 선별 맵은 **적격 영역이 비어 있어도** 거둔다. 오히려
+        # 그런 조건이야말로 분류기가 배워야 할 음성 표본이다. 지금까지는
+        # `pass_rate == 0` 이면 통째로 버려서, '전부 미형성인 광학 조건'
+        # 이 데이터에 한 건도 남지 않았다.
+        if keep_screen_maps and reg.get("formed_map") is not None:
+            fm = np.asarray(reg["formed_map"], dtype=bool)
+            dzs = np.asarray(reg["defocus_axis"], dtype=np.float64)
+            drs = np.asarray(reg["dose_axis"], dtype=np.float64)
+            for i, dr in enumerate(drs):
+                for j, dz in enumerate(dzs):
+                    sp = DS.SampleSpec(**{**local.__dict__,
+                                          "defocus": float(dz),
+                                          "dose_rel": float(dr)})
+                    screen_rows.append(sp.condition_vector())
+                    screen_formed.append(bool(fm[i, j]))
+        if reg["pass_rate"] == 0.0:
+            skipped += 1
+            return
+        specs.extend(design_grid(local, reg, n_defocus, n_dose,
+                                 extent=extent))
         regions.append({**opt, **reg["bounds"], "pass_rate": reg["pass_rate"],
+                        "formed_rate": reg.get("formed_rate", float("nan")),
                         "refined": reg.get("refined", False)})
 
     if n_workers == 1:
@@ -307,6 +391,13 @@ def plan_campaign(
     return {
         "specs": specs,
         "regions": regions,
+        # [108 번] 분류기용. 결정론 선별 경로의 값이므로 회귀 라벨과
+        # **절대 섞지 않는다.** 측정 절차가 다른 두 값을 한 라벨에 넣는
+        # 것이 이 프로젝트가 계속 잡아 온 유형의 오류다.
+        "screen_conditions": (np.asarray(screen_rows, dtype=np.float64)
+                              if screen_rows
+                              else np.zeros((0, len(DS.CONDITION_KEYS)))),
+        "screen_formed": np.asarray(screen_formed, dtype=bool),
         "n_optical": n_optical,
         "n_skipped": skipped,
         "n_refined": sum(1 for r in regions if r.get("refined")),
@@ -328,8 +419,23 @@ def run_campaign(
     checkpoint: str | None = None,
     checkpoint_every: int = 50,
     progress=None,
+    keep_formed: bool = False,
 ) -> dict:
     """다중 프로세스로 데이터셋을 생성한다. 체크포인트로 재개를 지원한다.
+
+    keep_formed
+    -----------
+    [14 차 보완 107 번] True 면 **패턴이 형성된 행은 품질 미달이어도
+    보관**하고, 행별로 적격 여부와 품질 플래그를 함께 기록한다.
+
+    13 주차까지는 적격 행만 남겼다. 그래서 학습 데이터의 NILS 최솟값이
+    문턱(2.121) 바로 위 2.1317 에서 끊겼고, **문턱 아래 행이 0 건**이었다.
+    그 모형에게 "NILS 가 문턱 이상인가" 를 묻고 있었다. 경계의 한쪽만 보고
+    경계를 판정하라는 것이다.
+
+    보관만 하고 **거르지 않는다.** 학습 쪽에서 `--eligible-only` 로 옛
+    설계를 그대로 재현할 수 있어야, 수정의 효과와 표본의 효과를 가를 수
+    있기 때문이다.
 
     Parameters
     ----------
@@ -378,6 +484,8 @@ def run_campaign(
     _save()
 
     conds, profs, labs, tgts, kept = [], [], [], [], []
+    elig: list[bool] = []
+    qflags: dict[str, list[bool]] = {}
     # [10주차 보정] 품질 플래그가 늘어나도 깨지지 않도록 defaultdict 로 둔다.
     # 고정 딕셔너리로 두었더니 budget_ok 플래그를 추가한 순간 아래 집계가
     # KeyError 로 중단되었다. 품질 기준은 앞으로도 늘어날 수 있다.
@@ -387,14 +495,21 @@ def run_campaign(
         r = results.get(k)
         if r is None:
             continue
-        if r["ok"]:
+        q = r.get("quality") or {}
+        # [107 번] 라벨이 정의되는 기준은 `formed` 다. 미형성 행은 CD 가
+        # 없어 NILS 도 없으므로 회귀로는 끝내 쓸 수 없다(분류는 108 번).
+        take = bool(r["ok"]) or (keep_formed and bool(q.get("formed")))
+        if take:
             conds.append(r["condition"]); profs.append(r["profile"])
             labs.append(r["labels"]); tgts.append(r["target_cd"])
             # 어떤 입력 조건에서 나온 표본인지 기록한다. 이것이 없으면
             # 학습/검증을 광학 조건 단위로 나눌 때 표본과 조건을 맞출 수 없다.
             kept.append(k)
-        else:
-            for key, v in r["quality"].items():
+            elig.append(bool(r["ok"]))
+            for key, v in q.items():
+                qflags.setdefault(key, []).append(bool(v))
+        if not r["ok"]:
+            for key, v in q.items():
                 if not v:
                     reject[key] += 1
                     break
@@ -405,7 +520,14 @@ def run_campaign(
         "labels": np.array(labs) if labs else np.zeros((0, len(DS.LABEL_KEYS))),
         "target_cd": np.array(tgts),
         "kept_index": np.array(kept, dtype=np.int64),
-        "ok": np.ones(len(conds), dtype=bool),
+        # [107 번] 행별 적격 여부. 옛 판은 전부 적격이라 상수 True 였다.
+        # 이제는 보관 행에 품질 미달이 섞이므로 **행마다 달라진다.**
+        "ok": np.asarray(elig, dtype=bool),
+        "quality_keys": sorted(qflags),
+        "quality_flags": (np.column_stack([qflags[k] for k in sorted(qflags)])
+                          if qflags else np.zeros((len(conds), 0), dtype=bool)),
+        "n_eligible": int(sum(elig)),
+        "n_band": int(len(elig) - sum(elig)),
         "condition_keys": DS.CONDITION_KEYS,
         "label_keys": DS.LABEL_KEYS,
         "reject": reject,

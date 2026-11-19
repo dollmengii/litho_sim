@@ -738,6 +738,174 @@ def build_model(kind: str, cat_mask: np.ndarray, quick: bool):
 THRESHOLD = 0.30
 
 
+#: 빛의 세기가 가질 수 있는 하한. `|E|^2` 이므로 음수가 될 수 없다.
+PROFILE_PHYSICAL_MIN = 0.0
+
+
+def train_formed_classifier(d, ck: list[str], feat: list[str],
+                            cat_mask, quick: bool = False) -> dict:
+    """형성 여부 분류기. [14 차 보완 108 번]
+
+    왜 분류인가
+    -----------
+    미형성 영역에는 **회귀 라벨이 아예 없다.** 패턴이 안 생기면 CD 가
+    정의되지 않고, NILS 는 CD 를 곱해 만드는 값이라 함께 없다. 그래서 그
+    영역은 회귀로는 끝내 배울 수 없다.
+
+    그런데 **형성되는가 자체는 모든 점에서 참/거짓이 정해진다.** 선별
+    격자에서 잰 미형성 비율은 데이터셋마다 다르다(소규모 53.1 %, 10 만
+    건 실측 47.4 %). 어느 쪽이든 작지 않고, 지금 모형은 그 영역을 한 번도
+    못 봤으면서 질문을 받으면 외삽해서 음수 NILS 를 뱉는다(103 번).
+    **비율을 상수로 적지 않는다**(114 번) -- 번들의 `formed_rate` 가 그
+    실행에서 실제로 잰 값이다.
+    분류기가 있으면 거기서 "패턴이 생기지 않는다" 고 **정확히** 답한다.
+
+    공짜인 이유
+    -----------
+    학습 데이터는 사전 탐색이 **이미 쓸어 보고 버리던** 맵이다
+    (`campaign.feasible_region` 의 `nils_map`). 추가 연산이 0 이다.
+
+    섞으면 안 되는 것
+    -----------------
+    이 라벨은 **결정론 선별 경로**의 값이고, 회귀 라벨 `nils` 는 몬테카를로
+    경로의 값이다. 측정 절차가 다른 두 값을 한 라벨에 넣는 것이 이
+    프로젝트가 계속 잡아 온 유형의 오류다. 그래서 번들을 따로 저장하고
+    이름에 `screen_` 을 남겨 둔다.
+
+    선별이 스칼라 모델이라는 것
+    ---------------------------
+    `screen_condition(fast=True)` 는 TE 벡터보다 대비를 높게 본다(8 % 이내,
+    낙관 방향). 따라서 이 분류 경계는 **살짝 낙관적**이다. 즉 '형성된다'
+    고 한 곳이 실제로는 미형성일 수 있다. 반대 방향 오류는 구조적으로
+    생기지 않는다. 한계로 적어 둔다.
+    """
+    files = getattr(d, "files", None) or list(d)
+    if "screen_conditions" not in files or "screen_formed" not in files:
+        return {"available": False, "reason": "선별 맵이 데이터셋에 없다"}
+    Xs = np.asarray(d["screen_conditions"], dtype=np.float64)
+    ys = np.asarray(d["screen_formed"], dtype=bool)
+    if Xs.shape[0] < 200 or ys.size != Xs.shape[0]:
+        return {"available": False, "reason": f"선별 맵 {Xs.shape[0]} 점은 부족"}
+    if ys.all() or (~ys).all():
+        # 한 부류만 있으면 분류기는 상수를 배운다. 정확도는 높게 나오고
+        # 아무것도 못 가린다. 59·101 번과 같은 함정이라 막아 둔다.
+        return {"available": False,
+                "reason": f"한 부류뿐 (형성 {100 * ys.mean():.1f} %)"}
+
+    idx = [ck.index(f) for f in feat if f in ck]
+    X = Xs[:, idx]
+    from sklearn.ensemble import HistGradientBoostingClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import roc_auc_score, confusion_matrix
+
+    Xtr, Xte, ytr, yte = train_test_split(
+        X, ys, test_size=0.25, random_state=0, stratify=ys)
+    clf = HistGradientBoostingClassifier(
+        max_iter=120 if quick else 400, learning_rate=0.1,
+        early_stopping=True, validation_fraction=0.15, random_state=0)
+    clf.fit(Xtr, ytr)
+    pr = clf.predict_proba(Xte)[:, 1]
+    pred = pr >= 0.5
+    tn, fp, fn, tp = confusion_matrix(yte, pred, labels=[0, 1]).ravel()
+    out = {
+        "available": True, "model": clf, "features": list(feat),
+        "n_points": int(Xs.shape[0]), "formed_rate": float(ys.mean()),
+        "auc": float(roc_auc_score(yte, pr)),
+        "accuracy": float((pred == yte).mean()),
+        # 미형성을 형성이라고 하는 쪽(fp)이 위험하다. 그 점에서 회귀가
+        # 외삽하게 되기 때문이다. 둘을 갈라서 적는다.
+        "false_formed": int(fp), "false_unformed": int(fn),
+        "n_test": int(yte.size),
+        "note": ("결정론 선별(스칼라) 경로의 라벨. 회귀 라벨과 다른 "
+                 "측정 절차이므로 섞지 말 것."),
+    }
+    print("\n  [형성 분류기]  미형성 영역을 덮는다 (108 번)")
+    print(f"    학습 점 {out['n_points']:,} (형성 {100 * out['formed_rate']:.1f} %)"
+          f"   AUC {out['auc']:.4f}  정확도 {100 * out['accuracy']:.2f} %")
+    print(f"    미형성을 형성이라 함 {fp} / {int(yte.size)}  "
+          f"(이 오류가 회귀 외삽을 부른다)")
+    print(f"    형성을 미형성이라 함 {fn} / {int(yte.size)}  "
+          f"(이 오류는 쓸 수 있는 후보를 버린다)")
+    return out
+
+
+def _subset_dataset(d, keep: np.ndarray, n_old: int) -> dict:
+    """행 부분집합을 고르고, 분할 인덱스를 새 행 번호로 다시 매긴다.
+
+    [14 차 보완 107 번] `--eligible-only` 로 띠를 빼면 행 번호가 바뀐다.
+    `split_train` 등은 **옛 번호**를 담고 있으므로 다시 매핑해야 한다.
+    매핑하지 않으면 분할이 엉뚱한 행을 가리키는데 프로그램은 멀쩡히 돈다.
+    조용히 틀리는 쪽이라 가장 위험하다.
+
+    `screen_` 접두 배열은 선별 맵이라 행 축이 다르다. 건드리지 않는다.
+
+    `n_old` 를 **인수로 받는 이유** [14 차 보완 109 번]
+    ----------------------------------------------------
+    처음에는 `max(keep) + 1` 로 행 수를 짐작했다. 그건 마지막 행이 적격일
+    때만 맞는다. 띠 행이 꼬리에 있으면 `max(keep) + 1 < 실제 행 수` 가 되고,
+    그러면 아래 `v.shape[0] == n_old` 가 **어떤 배열에도 걸리지 않아** 행
+    배열이 하나도 잘리지 않는다. 즉 `--eligible-only` 가 아무 일도 하지
+    않은 채 조용히 지나간다. 실측 데이터에서 `target_cd` 가 89,917 행으로
+    남아 `cd_error` 파생이 사라지는 것으로 드러났다. 드러난 것은 운이었고,
+    드러나지 않았으면 분할이 엉뚱한 행을 가리킨 채 숫자가 나왔다.
+    행 수는 짐작할 것이 아니라 **부르는 쪽이 아는 값**이므로 받는다.
+    """
+    keep = np.asarray(keep, dtype=np.int64)
+    n_old = int(n_old)
+    if keep.size and int(keep.max()) >= n_old:
+        raise ValueError(
+            f"keep 의 최댓값 {int(keep.max())} 이 행 수 {n_old} 를 넘습니다.")
+    old2new = {int(o): i for i, o in enumerate(keep)}
+    out: dict = {}
+    for k in (getattr(d, "files", None) or list(d)):
+        v = np.asarray(d[k])
+        if k.startswith("split_"):
+            out[k] = np.array([old2new[int(i)] for i in v.ravel()
+                               if int(i) in old2new], dtype=np.int64)
+        elif k.startswith("screen_"):
+            out[k] = v
+        elif v.ndim >= 1 and v.shape[0] == n_old:
+            out[k] = v[keep]
+        else:
+            out[k] = v
+    return out
+
+
+def profile_physical_range(p_true: np.ndarray,
+                           p_pred: np.ndarray) -> dict:
+    """예측 프로파일이 물리 범위를 벗어난 정도를 센다. 판정하지 않는다.
+
+    [14 차 보완 105 번] 세기는 `|E|^2` 이라 음수가 불가능하고 저장된 참
+    프로파일도 전부 0 이상이다. 그런데 예측은 **주성분 재구성**이라 음수가
+    나올 수 있고, 음수 프로파일에서도 임계값 교차는 수학적으로 멀쩡히
+    계산된다. 즉 **불가능한 프로파일에서 뽑은 CD** 가 정상 숫자처럼
+    보고될 수 있다.
+
+    103·104 번과 같은 유형이되 이 값은 **판정에 쓰이지 않고 보고 지표**
+    이므로, 판정을 바꾸지 않고 세기만 한다. 103 번의 교훈대로 **막기 전에
+    센다.**
+
+    `n_negative_true` 를 함께 돌려주는 것이 중요하다. 참 프로파일에도
+    음수가 있으면 그것은 재구성 탓이 아니라 **데이터 생성 쪽 문제**이고,
+    둘을 가르지 않으면 원인을 잘못 짚는다.
+    """
+    p_true = np.asarray(p_true, dtype=np.float64)
+    p_pred = np.asarray(p_pred, dtype=np.float64)
+    lo = PROFILE_PHYSICAL_MIN
+    n_pt = int(p_pred.size)
+    n_neg = int(np.count_nonzero(p_pred < lo))
+    return {
+        "n_negative_points": n_neg,
+        "n_negative_profiles": int(np.count_nonzero(
+            np.any(p_pred < lo, axis=1))) if p_pred.ndim == 2 else 0,
+        "worst_negative": float(p_pred.min()) if n_pt else float("nan"),
+        "n_negative_true": int(np.count_nonzero(p_true < lo)),
+        "n_points_total": n_pt,
+        "frac_negative": (n_neg / n_pt) if n_pt else 0.0,
+        "physical_min": float(lo),
+    }
+
+
 def profile_cd(prof: np.ndarray, pitch: float, thr: float) -> float:
     """세기 프로파일에서 선폭을 뽑는다.
 
@@ -854,6 +1022,27 @@ def run_profiles(d: dict, X: np.ndarray, cond: np.ndarray, ck: list[str],
     print(f"    세기 변동폭 평균  {rng:.5g}  -> 상대 {100 * rmse / rng:.3f} %")
     print("    이 지표가 본체다. 64 점 전체를 비교하므로 자명한 성분이 없다.")
 
+    # --- [14 차 보완 105 번] 예측 프로파일의 물리 범위 ---------------------
+    # 세는 일은 `profile_physical_range` 가 한다. 순수 함수로 뺀 이유는
+    # 이 구간이 `tr >= 100 and va >= 20` 일 때만 돌기 때문이다. 소규모
+    # 데이터로는 한 번도 실행되지 않아 **시험할 수 없는 코드**가 된다.
+    # 함수로 빼면 회귀가 직접 부를 수 있다(validate_w13 Case 26).
+    out_neg = profile_physical_range(Pva, Pva_hat)
+    print("\n  [예측 프로파일의 물리 범위]  세기는 |E|^2 이라 음수 불가")
+    print(f"    음수 점   {out_neg['n_negative_points']:,} / "
+          f"{out_neg['n_points_total']:,} "
+          f"({100 * out_neg['frac_negative']:.3f} %)")
+    print(f"    음수가 섞인 프로파일 {out_neg['n_negative_profiles']:,} / "
+          f"{len(va):,} 건   최솟값 {out_neg['worst_negative']:.4g}")
+    if out_neg["n_negative_true"]:
+        print(f"    [경고] 참 프로파일에도 음수가 "
+              f"{out_neg['n_negative_true']:,} 점 있다. "
+              f"데이터 생성 쪽을 봐야 한다.")
+    elif out_neg["n_negative_points"]:
+        print("    참 프로파일은 전부 0 이상이다. 즉 이 음수는 데이터가")
+        print("    아니라 **재구성이 만든 것**이며, 그 구간의 CD 는 물리")
+        print("    프로파일에서 뽑은 값이 아니다(14 차 보완 105 번).")
+
     # --- 예측 프로파일에서 CD 와 NILS 를 뽑아 물리 단위로 본다 ------------
     pitch = cond[va][:, ck.index("pitch")]
     cd_t = np.array([profile_cd(Pva[i], pitch[i], THRESHOLD)
@@ -864,7 +1053,8 @@ def run_profiles(d: dict, X: np.ndarray, cond: np.ndarray, ck: list[str],
     out: dict = {"available": True, "n_components": int(pca.n_components_),
                  "explained_variance": float(evr[-1]),
                  "profile_rmse": rmse, "profile_range": rng,
-                 "fit_seconds": fit_s, "n_val": int(va.size)}
+                 "fit_seconds": fit_s, "n_val": int(va.size),
+                 "physical_range": out_neg}
     if ok.sum() >= 20:
         de = cd_p[ok] - cd_t[ok]
         out["cd_from_profile"] = {
@@ -948,6 +1138,10 @@ def main() -> int:
                     help="joblib 로 저장할 경로 접두사(빈 값이면 저장 안 함)")
     ap.add_argument("--n-rows", type=int, default=N_ROWS_DEFAULT)
     ap.add_argument("--n-trials", type=int, default=N_TRIALS_DEFAULT)
+    ap.add_argument("--eligible-only", action="store_true",
+                    help=("경계 밖 띠를 빼고 적격 행만으로 학습한다. "
+                          "13주차 설계를 그대로 재현해 **같은 데이터에서** "
+                          "수정 전/후를 비교하기 위한 것이다. [107번]"))
     ap.add_argument("--profiles", action="store_true",
                     help="프로파일(패턴 형상) 예측도 함께 학습한다. "
                          "과제 제목의 '패턴 형성 예측' 에 해당한다")
@@ -992,6 +1186,37 @@ def main() -> int:
     lab_raw = np.asarray(d["labels"], dtype=np.float64)
     n = cond.shape[0]
     print(f"\n  데이터 {n:,} 건, 조건 {len(ck)} 열, 라벨 {len(lk_raw)} 열")
+
+    # --- [14 차 보완 107 번] 적격 행과 경계 밖 띠 -------------------------
+    # 옛 데이터셋에는 `eligible` 열이 없다(전부 적격이라 쓸 이유가 없었다).
+    # 없으면 전부 적격으로 본다. 뒤호환이 목적이 아니라, **열이 없는 것**과
+    # **전부 False 인 것**을 섞지 않기 위해서다.
+    elig = (np.asarray(d["eligible"], dtype=bool)
+            if "eligible" in getattr(d, "files", d) else
+            np.ones(n, dtype=bool))
+    n_band = int((~elig).sum())
+    if n_band:
+        print(f"  적격 {int(elig.sum()):,} · 경계 밖 띠 {n_band:,} "
+              f"({100 * n_band / n:.1f} %)")
+        print("  띠는 품질 미달이지만 패턴은 형성된 행이다. 이것이 없으면")
+        print("  문턱 아래에 학습 데이터가 0 건이라, 모형이 **경계의 한쪽만**")
+        print("  보고 품질을 판정하게 된다(103 번의 뿌리).")
+    else:
+        print("  경계 밖 띠 0 건. 이 데이터셋은 적격 행만 담고 있다.")
+        print("  품질 판정에 쓰면 문턱 아래가 전부 외삽이 된다(107 번).")
+    if args.eligible_only and n_band:
+        keep = np.where(elig)[0]
+        print(f"  --eligible-only : 띠 {n_band:,} 건을 빼고 "
+              f"{len(keep):,} 건으로 학습한다 (옛 설계 재현)")
+        n_rows_before = n                 # 109 번 : 짐작하지 말고 넘긴다
+        cond, lab_raw, n = cond[keep], lab_raw[keep], len(keep)
+        d = _subset_dataset(d, keep, n_rows_before)
+        elig = elig[keep]
+        for _k in ("target_cd",):         # 잘렸는지 **확인**한다
+            if _k in d and np.asarray(d[_k]).shape[0] != n:
+                raise SystemExit(
+                    f"[오류] --eligible-only 가 '{_k}' 를 자르지 못했습니다 "
+                    f"({np.asarray(d[_k]).shape[0]} != {n}). 109 번 참조.")
 
     lab, lk = add_derived(d, lab_raw, lk_raw)
     made = [k for k in lk if k not in lk_raw]
@@ -1359,6 +1584,27 @@ def main() -> int:
                 d, X, cond, ck, split, kind, cat_mask, args.quick,
                 args.n_components)
         report["models"][kind] = mrep
+
+    # --- [14 차 보완 108 번] 형성 분류기 ----------------------------------
+    # 회귀 모형 종류와 무관하므로 한 번만 학습한다. 번들도 따로 저장한다.
+    # 회귀 라벨과 **측정 절차가 다르기 때문에** 한 파일에 담지 않는다.
+    clf_rep = train_formed_classifier(d, ck, feat, cat_mask, args.quick)
+    report["formed_classifier"] = {k: v for k, v in clf_rep.items()
+                                   if k != "model"}
+    if clf_rep.get("available") and args.save_model:
+        import joblib
+        cpath = f"{args.save_model}_formed.joblib"
+        _cd = os.path.dirname(cpath)
+        if _cd:
+            os.makedirs(_cd, exist_ok=True)
+        joblib.dump({k: v for k, v in clf_rep.items()
+                     if k not in ("available",)}, cpath)
+        print(f"    저장 : {cpath}")
+    elif not clf_rep.get("available"):
+        print(f"\n  [형성 분류기] 학습하지 않음 : {clf_rep.get('reason')}")
+        # [114 번] 분류기가 없으면 비율도 못 잰다. 숫자를 적지 않는다.
+        print("    미형성 영역은 회귀로 덮이지 않는다.")
+        print("    --keep-formed 로 생성한 데이터셋이면 선별 맵이 들어 있다.")
 
     # --- 모형 비교 --------------------------------------------------------
     if len(kinds) > 1:

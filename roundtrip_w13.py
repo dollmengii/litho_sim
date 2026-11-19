@@ -799,11 +799,19 @@ def pick_candidates(rows: list[dict], n_top: int, n_spread: int) -> list[int]:
     # 안에서 계산되므로, 표본이 위반군으로 몰리면 중심 판정의 후보 수가
     # 모자라진다. 실측 : 수차가 큰 영역에서 통과군이 9 개뿐이었다.
     def ok(i):
-        return bool(rows[i]["nils_ok"] and rows[i]["cdu_ok"])
+        # [14 차 보완 103 번] 확정 통과만 통과군이다. 판정 불가는 위반도
+        # 통과도 아니므로 아래 viol_rest 로 가지 않게 따로 센다.
+        return rows[i].get("verdict", "") == RC.VERDICT_PASS
 
     taken = set(idx)
     keep_rest = [i for i in range(n) if i not in taken and ok(i)]
     viol_rest = [i for i in range(n) if i not in taken and not ok(i)]
+    # 판정 불가 후보는 되돌려 재는 것이 **가장 값싼 해소 수단**이다.
+    # 시뮬레이터로 재면 물리 범위 안의 값이 반드시 나오기 때문이다.
+    undet_rest = [i for i in range(n) if i not in taken
+                  and rows[i].get("verdict", "") == RC.VERDICT_UNDET]
+    if undet_rest:
+        viol_rest = undet_rest + [i for i in viol_rest if i not in undet_rest]
     n_keep = max(1, (n_spread * 2) // 3)       # 2/3 는 통과군에
     for pool, want in ((keep_rest, n_keep), (viol_rest, n_spread - n_keep)):
         if not pool or want <= 0:
@@ -927,8 +935,12 @@ def main() -> int:
     # 조건 차이가 모형 차이로 읽힌다(13주차에 찾은 결함). 교집합에서 한
     # 번만 읽어 모든 모형에 같은 조건을 쓴다.
     loaded = {}
+    loaded_clf: dict = {}
     for pref in prefixes:
         loaded[pref] = RC.load_bundles(pref, RC.LABELS_REQUIRED)
+        # [108 번] 되돌림도 같은 2 단계 관문을 써야 한다. 추천기와 다른
+        # 관문으로 재면 비교가 성립하지 않는다.
+        loaded_clf[pref] = RC.load_formed_classifier(pref)
     doms = [loaded[p][RC.LABELS_REQUIRED[0]]["domain"] for p in prefixes]
     dom_of = dict(zip(prefixes, doms))
 
@@ -1032,7 +1044,8 @@ def main() -> int:
                     r = RC.rank(bundles, feat, t, args.pitch, args.duty,
                                 rel_p95, args.n_na, args.n_sigma,
                                 args.focus_span, args.n_focus,
-                                args.dose_span, args.n_dose, args.el, False)
+                                args.dose_span, args.n_dose, args.el, False,
+                                formed_clf=loaded_clf.get(pref))
                     _t_sur += time.perf_counter() - _t0
                 except SystemExit as e:
                     # 거부는 **결과**다. 보강 전 모형이 넓힌 영역에서 상자
@@ -1067,7 +1080,7 @@ def main() -> int:
                     print(f"    [거부] {refused}")
                 per_model.append((tname, [], scope, outside, refused))
                 continue
-            rows_all.sort(key=lambda r: (r["nils_ok"] and r["cdu_ok"],
+            rows_all.sort(key=lambda r: (RC.VERDICT_ORDER[r["verdict"]],
                                          r["nominal"]["dof"],
                                          r["nominal"]["total"]), reverse=True)
 
@@ -1179,6 +1192,12 @@ def main() -> int:
                         "sim_dof": _sm.get("dof"),
                         "sur_nils_ok": bool(_r["row"]["nils_ok"]),
                         "sur_cdu_ok": bool(_r["row"]["cdu_ok"]),
+                        "sur_verdict": _r["row"].get("verdict"),
+                        "sur_verdict_q": _r["row"].get("verdict_q"),
+                        "sur_out_of_range": _r["row"].get("n_out_of_range"),
+                        "sur_frac_out": _r["row"].get("frac_out_of_range"),
+                        "sur_nils_q": _r["row"].get("nils_q"),
+                        "sur_cdu_q": _r["row"].get("cdu_q"),
                         "sim_nils_ok": bool(_sm.get("nils_ok")),
                         "cdu_frac": _cd.get("frac_of_tol"),
                         "cdu_max": _cd.get("cdu_max"),
@@ -1256,7 +1275,12 @@ def report_tool(tname: str, recs: list[dict], args,
         return
 
     def sur_pass(r):
-        return bool(r["row"]["nils_ok"] and r["row"]["cdu_ok"])
+        # [14 차 보완 103 번] 확정 통과만 센다. 판정 불가를 통과로 세면
+        # 근거 없는 합격이 되고, 위반으로 세면 13주차에 발견한 그 버림이다.
+        return r["row"].get("verdict", "") == RC.VERDICT_PASS
+
+    def sur_undetermined(r):
+        return r["row"].get("verdict", "") == RC.VERDICT_UNDET
 
     def cdu_refuted(r):
         """실측 CDU 가 공차를 **넘은 것이 확인된** 경우만 True.
@@ -1300,7 +1324,8 @@ def report_tool(tname: str, recs: list[dict], args,
         dz = (f"{sim['focus_center'] - nm['focus_center']:+.1f}"
               if sim["focus_center"] is not None
               and nm["focus_center"] is not None else "-")
-        verd = (("통과" if sur_pass(r) else "위반") + " / "
+        verd = (("통과" if sur_pass(r)
+                 else ("판정불가" if sur_undetermined(r) else "위반")) + " / "
                 + ("통과" if sim_pass(r) else "위반"))
         print(f"    {r['rank'] + 1:>4}{r['row']['na']:>7.3f}"
               f"{r['row']['sigma_out']:>7.3f}"
@@ -1317,20 +1342,26 @@ def report_tool(tname: str, recs: list[dict], args,
     def sur_nils(r):
         return bool(r["row"]["nils_ok"])
 
+    # [14 차 보완 103 번] 판정 불가는 뒤집힘이 아니다. 예측이 **답을 내지
+    # 않은** 것이므로 실측과 '어긋났다' 고 셀 수 없다. 따로 센다.
+    undet = [r for r in good if sur_undetermined(r)]
+    cmp_pool = [r for r in good if not sur_undetermined(r)]
+
     measured_cdu = [r for r in good
                     if r["sim"].get("cdu", {}).get("ok")]
     if len(measured_cdu) == len(good) and good:
         # 양쪽이 NILS 와 CDU 를 모두 보므로 **같은 축**이다. 축을 맞추기
         # 위해 CDU 를 빼던 보정이 더 이상 필요하지 않다.
-        flip = [r for r in good if sur_pass(r) != sim_pass(r)]
+        flip = [r for r in cmp_pool if sur_pass(r) != sim_pass(r)]
         cdu_only = []
         axis_note = "예측·실측 모두 NILS + CDU"
     else:
-        flip = [r for r in good if sur_nils(r) != sim_pass(r)]
-        cdu_only = [r for r in good if sur_nils(r) and not r["row"]["cdu_ok"]]
+        flip = [r for r in cmp_pool if sur_nils(r) != sim_pass(r)]
+        cdu_only = [r for r in cmp_pool
+                    if sur_nils(r) and not r["row"]["cdu_ok"]]
         axis_note = "예측 NILS+CDU 대 실측 NILS (CDU 미측정)"
     keep = [r for r in good if sur_pass(r)]
-    viol = [r for r in good if not sur_pass(r)]
+    viol = [r for r in good if not sur_pass(r) and not sur_undetermined(r)]
 
     def block(rs: list[dict], label: str, primary: bool) -> None:
         if len(rs) < 3:
@@ -1523,11 +1554,23 @@ def report_tool(tname: str, recs: list[dict], args,
         print("      상한만 살아 있다. 공정창이 없다는 뜻이 아니므로 이")
         print("      후보의 DOF 차를 '모형이 낙관적' 으로 읽으면 안 된다.")
         print("      --n-focus / --n-dose 를 늘려 다시 재야 한다.")
-    print(f"\n    제약 판정이 뒤집힌 후보 : {len(flip)}/{len(good)}  "
+    print(f"\n    제약 판정이 뒤집힌 후보 : {len(flip)}/{len(cmp_pool)}  "
           f"(비교 축 : {axis_note})")
     if flip:
         print("      예측과 실측이 제약에서 갈린다. DOF 가 맞아도 이 후보는")
         print("      추천할 수 없거나, 반대로 버린 후보가 쓸 수 있다는 뜻이다.")
+    if undet:
+        _fr = max(r["row"].get("frac_out_of_range", 0.0) for r in undet)
+        print(f"\n    예측이 **판정 불가** 인 후보 : {len(undet)}/{len(good)}")
+        print("      창 안의 예측에 물리적으로 불가능한 값이 섞여 있다")
+        print(f"      (최악 행에서 창 점의 {100 * _fr:.1f} %).")
+        print("      뒤집힘 수에 넣지 않았다. 예측이 답을 내지 않았으므로")
+        print("      실측과 어긋났다고 셀 수 없다. 이 후보들은 **버린 것이")
+        print("      아니라 아직 모르는 것**이며, 되돌려 재는 것이 해소 수단이다.")
+        _ok = [r for r in undet if sim_pass(r)]
+        if _ok:
+            print(f"      이 가운데 {len(_ok)} 개는 실측에서 제약을 만족했다.")
+            print("      예전 규약(음수를 위반으로 읽음)이었다면 버렸을 후보다.")
 
     if measured_cdu:
         c0 = measured_cdu[0]["sim"]["cdu"]

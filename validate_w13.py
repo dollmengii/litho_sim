@@ -76,6 +76,8 @@ from scipy.ndimage import gaussian_filter1d
 
 import recommend as RC
 import roundtrip_w13 as RT
+import train_surrogate as TS
+from litho import campaign as CP13
 from litho import dataset as DS
 
 FAIL: list[str] = []
@@ -180,8 +182,13 @@ chk("keep" in src and "viol" in src and 'block(keep, "제약 통과군", True)' 
 # 추천기의 정렬 키가 등급을 최상위로 둔다는 전제 자체도 확인한다. 이것이
 # 깨지면 Case 3 의 서술이 통째로 뜻을 잃는다.
 rsrc = inspect.getsource(RC.rank)
-chk("nils_ok" in rsrc and "cdu_ok" in rsrc,
-    "추천기 정렬 키에 제약 통과 여부가 들어 있다 (섞임이 생기는 원인)")
+# [14 차 보완 103 번] 정렬 키가 두 값(통과/위반)에서 세 값(통과/판정 불가/
+# 위반)으로 바뀌었다. 등급이 최상위라는 전제는 그대로이고, 다만 판정 불가가
+# 위반과 한 칸에 묶이지 않는다는 것이 추가 조건이다.
+chk("VERDICT_ORDER" in rsrc and 'r["verdict"]' in rsrc,
+    "추천기 정렬 키에 세 값 제약 판정이 들어 있다 (섞임이 생기는 원인)")
+chk("nils_ok" not in rsrc.split("rows.sort")[1][:200],
+    "정렬 키가 더 이상 nils_ok/cdu_ok 를 직접 쓰지 않는다")
 
 # ---------------------------------------------------------------------------
 head(4, "후보 표집")
@@ -309,8 +316,8 @@ head(8, "뒤집힘 집계가 같은 축에서 비교하는가")
 # **재지 않은 축**이고, 모형 오차로 적으면 과대보고다.
 tsrc = inspect.getsource(RT.report_tool)
 chk("def sur_nils" in tsrc, "NILS 전용 판정 함수가 따로 있다")
-chk("flip = [r for r in good if sur_nils(r) != sim_pass(r)]" in tsrc,
-    "뒤집힘을 NILS 대 NILS 로 센다",
+chk("flip = [r for r in cmp_pool if sur_nils(r) != sim_pass(r)]" in tsrc,
+    "뒤집힘을 NILS 대 NILS 로 센다 (판정 불가 제외 풀에서)",
     "sur_pass(CDU 포함) 와 비교하면 과대보고가 된다")
 chk("cdu_only" in tsrc, "CDU 로만 떨어진 후보를 따로 센다")
 chk("비교 대상이 아니다" in tsrc,
@@ -320,8 +327,18 @@ chk("비교 대상이 아니다" in tsrc,
 # 추천기가 내놓지 않을 후보를 중심 판정에 넣으면 그것도 틀린 집계다.
 chk("keep = [r for r in good if sur_pass(r)]" in tsrc,
     "군 나누기는 추천기가 쓰는 판정(NILS+CDU)으로 한다")
-chk("r[\"row\"][\"nils_ok\"] and r[\"row\"][\"cdu_ok\"]" in tsrc,
-    "sur_pass 가 두 축을 모두 본다")
+chk('r["row"].get("verdict", "") == RC.VERDICT_PASS' in tsrc,
+    "sur_pass 가 확정 통과(두 축 + 물리 범위)만 센다")
+# [14 차 보완 103 번] 판정 불가를 뒤집힘에서 빼는 것이 이 수정의 핵심이다.
+# 빼지 않으면 '모형이 답을 내지 않은 것' 이 '실측과 어긋난 것' 으로 세어진다.
+chk("def sur_undetermined" in tsrc,
+    "판정 불가 전용 판정 함수가 따로 있다")
+chk("cmp_pool = [r for r in good if not sur_undetermined(r)]" in tsrc,
+    "뒤집힘 비교 풀에서 판정 불가를 뺀다")
+chk("뒤집힘 수에 넣지 않았다" in tsrc,
+    "판정 불가를 뒤집힘에서 뺐다는 것을 출력에 적는다")
+chk("버린 것이" in tsrc and "아직 모르는 것" in tsrc,
+    "판정 불가가 '버린 것' 이 아님을 출력에 적는다")
 
 # 산수로도 확인한다. CDU 로만 떨어진 후보가 하나 있을 때, 축을 맞추면
 # 뒤집힘 0, 맞추지 않으면 1 이 나와야 한다.
@@ -1118,34 +1135,78 @@ _o19 = FL.setup(os.path.join(
     os.environ.get("TMPDIR", "/tmp"), "_w13_figchk"))
 
 
-def _gap(use_pad: bool):
-    """제목 아래 모서리와 축 위 모서리의 간격 [px]. **그린 뒤에** 잰다."""
+def _gap(use_pad: bool, dpi: float | None = None, loc: str = "center"):
+    """제목과 축 사이 간격을 **포인트**로 잰다. 그리고 난 뒤에 잰다.
+
+    왜 px 가 아니라 pt 인가 [14 차 보완 111 번]
+    -------------------------------------------
+    처음에는 px 로 재고 문턱을 `> 40` 으로 박았다. 그 40 은 **이 개발
+    컨테이너에서 재서** 정한 값이고, 거기서는 `figure.dpi` 가 200 이었다.
+    그런데 matplotlib 의 기본값은 100 이고 `figlib.setup` 은 dpi 를 건드리지
+    않는다. 그래서 윈도우(기본 100)에서 같은 코드가 31.7 px 로 나와 **네
+    사례가 실패했다.** 간격 자체는 22.80 pt 로 양쪽이 **똑같았다.** 즉 그림은
+    처음부터 정상이었고 시험이 환경에 묶여 있었다.
+    `TITLE_PAD` 는 pt 단위로 정해 둔 양이므로 **pt 로 재야** 재는 양과 정한
+    양의 단위가 같아진다. 300 dpi 로 저장하면 옛 음성 대조 문턱(20 px)마저
+    경계에 닿았다 -- 양방향으로 깨지는 문턱이었다.
+    """
+    if dpi is not None:
+        FL.plt.rcParams["figure.dpi"] = dpi
     fig, ax = FL.plt.subplots(figsize=(6.0, 3.2))
     ax.plot([0, 1], [0, 1])
     FL.ylab(ax, "이 거리보다 가까운 학습 조건의 비율 [%]")
-    ax.set_title("외삽 판정의 참조 분포")
+    ax.set_title("외삽 판정의 참조 분포", loc=loc)
     if use_pad:
         FL._lift_titles(fig)
     else:
         ax.title.set_y(1.16)                  # 옛 방식 (음성 대조)
     fig.canvas.draw()                          # savefig 와 같은 경로
-    g = ax.title.get_window_extent().y0 - ax.get_window_extent().y1
+    t = ax.title if loc == "center" else getattr(ax, f"_{loc}_title")
+    g_px = t.get_window_extent().y0 - ax.get_window_extent().y1
     FL.plt.close(fig)
-    return float(g)
+    return float(g_px) * 72.0 / float(fig.dpi)
 
 
+_dpi19 = FL.plt.rcParams["figure.dpi"]            # 끝에 되돌린다
 _g_pad, _g_old = _gap(True), _gap(False)
-# 기준값은 **재서** 정했다. 고친 방식 63.3 px, 옛 방식·기본 13.3 px
-# (matplotlib 의 기본 titlepad). 가운데를 넉넉히 비워 둔다.
-chk(_g_pad > 40.0,
-    "고친 방식 : 그린 뒤에도 제목이 축 위 40 px 넘게 떨어져 있다",
-    f"{_g_pad:.1f} px")
-chk(_g_old < 20.0,
+# 기준값은 **재서** 정했다. 고친 방식 22.80 pt, 옛 방식·기본 4.80 pt.
+# `TITLE_PAD` 가 24 pt 이고 가로 라벨이 축 위 17 pt 까지 차지하므로, 라벨을
+# 넘으려면 17 pt 보다 커야 한다. 그 사이를 문턱으로 잡는다.
+chk(_g_pad > 18.0,
+    "고친 방식 : 그린 뒤에도 제목이 축 위 18 pt 넘게 떨어져 있다",
+    f"{_g_pad:.2f} pt (가로 라벨이 17 pt 까지 차지한다)")
+chk(_g_old < 10.0,
     "음성 대조 : 옛 set_y 방식은 그리는 순간 기본 위치로 되돌려진다",
-    f"{_g_old:.1f} px")
-chk(_g_pad > _g_old + 30.0,
+    f"{_g_old:.2f} pt")
+chk(_g_pad > _g_old + 10.0,
     "두 방식의 차이가 분명하다 (우연히 통과한 것이 아니다)",
-    f"{_g_pad:.1f} 대 {_g_old:.1f} px")
+    f"{_g_pad:.2f} 대 {_g_old:.2f} pt")
+
+# [111 번] 이 측정이 dpi 에 묶여 있지 않은지 **직접** 확인한다. 문턱을
+# 환경에서 재서 박아 넣었던 것이 바로 이 사례가 생긴 원인이다.
+_g100, _g300 = _gap(True, dpi=100.0), _gap(True, dpi=300.0)
+chk(abs(_g100 - _g300) < 0.5,
+    "간격이 dpi 와 무관하다 (100 dpi 와 300 dpi 가 같다)",
+    f"{_g100:.2f} 대 {_g300:.2f} pt. 다르면 문턱이 환경에 묶인 것이다")
+chk(_g100 > 18.0 and _g300 > 18.0,
+    "두 dpi 모두 문턱을 넘는다",
+    "윈도우 기본 100 과 저장용 300 양쪽에서 성립해야 한다")
+FL.plt.rcParams["figure.dpi"] = _dpi19
+
+# 겹치지 않는다는 **실제 요구**를 직접 잰다. 위의 pt 문턱은 그 요구를 숫자로
+# 옮긴 것이고, 여기서는 가로 라벨 글상자와 제목 글상자가 닿는지를 본다.
+_f19d, _a19d = FL.plt.subplots(figsize=(6.0, 3.2))
+_a19d.plot([0, 1], [0, 1])
+FL.ylab(_a19d, "이 거리보다 가까운 학습 조건의 비율 [%]")
+_a19d.set_title("외삽 판정의 참조 분포")
+FL._lift_titles(_f19d)
+_f19d.canvas.draw()
+_lab19 = [c for c in _a19d.texts if "가까운" in c.get_text()][0]
+chk(_a19d.title.get_window_extent().y0
+    >= _lab19.get_window_extent().y1,
+    "제목 글상자가 가로 라벨 글상자와 겹치지 않는다",
+    "이것이 TITLE_PAD 가 존재하는 이유다")
+FL.plt.close(_f19d)
 
 # 제목을 나중에 걸어도 듣는가. `ylab` 과 `set_title` 의 호출 순서에
 # 상관없어야 한다는 것이 `figlib` 이 적어 둔 약속이다.
@@ -1155,7 +1216,8 @@ _a19.set_title("먼저 건 제목")
 FL.ylab(_a19, "나중에 건 라벨")
 FL._lift_titles(_f19)
 _f19.canvas.draw()
-chk(_a19.title.get_window_extent().y0 - _a19.get_window_extent().y1 > 40.0,
+chk((_a19.title.get_window_extent().y0 - _a19.get_window_extent().y1)
+    * 72.0 / _f19.dpi > 18.0,
     "제목을 먼저 걸어도 듣는다 (호출 순서에 무관)")
 FL.plt.close(_f19)
 
@@ -1167,8 +1229,8 @@ FL.ylab(_a19b, "라벨")
 _a19b.set_title("왼쪽 제목", loc="left")
 FL._lift_titles(_f19b)
 _f19b.canvas.draw()
-chk(_a19b._left_title.get_window_extent().y0
-    - _a19b.get_window_extent().y1 > 40.0,
+chk((_a19b._left_title.get_window_extent().y0
+     - _a19b.get_window_extent().y1) * 72.0 / _f19b.dpi > 18.0,
     "왼쪽 정렬 제목도 밀린다 (get_title 은 가운데 것만 준다)")
 FL.plt.close(_f19b)
 
@@ -1180,9 +1242,11 @@ _a19c.set_ylabel("보통 세로 라벨")
 _a19c.set_title("제목")
 FL._lift_titles(_f19c)
 _f19c.canvas.draw()
-chk(_a19c.title.get_window_extent().y0
-    - _a19c.get_window_extent().y1 < 20.0,
-    "가로 라벨을 안 쓴 축은 그대로 둔다 (과잉 보정 없음)")
+chk((_a19c.title.get_window_extent().y0
+     - _a19c.get_window_extent().y1) * 72.0 / _f19c.dpi < 10.0,
+    "가로 라벨을 안 쓴 축은 그대로 둔다 (과잉 보정 없음)",
+    "[111 번] 이 줄도 px 였다. 300 dpi 에서 기본 titlepad 가 25 px 로 "
+    "커져 문턱을 넘었다. 같은 유형을 한 곳 놓친 것이다")
 FL.plt.close(_f19c)
 
 # 주석과 설명에 'set_y' 라는 **말**은 남아 있어야 한다(왜 안 쓰는지
@@ -1662,6 +1726,653 @@ chk(not _missing23, "화면이 꺼내는 rayleigh 열쇠가 전부 실재한다"
 chk('"k3_used" not in rayleigh' in _txt23,
     "옛 optics 와 섞였을 때 설명 줄이 앱을 죽이지 않고 그 사실을 알린다")
 
+
+# ---------------------------------------------------------------------------
+head(24, "제약 관문의 물리 범위 검사와 판정 불가 분류")
+# [14 차 보완 103 번] 13주차 Ⅶ 이 찾은 것 : 대리 모형이 NILS 에 음수를
+# 예측하고, 추천기가 그 값을 범위 검사 없이 제약값으로 썼다. NILS 는 정의가
+# CD x |d ln I / dx| 이므로 0 이상이 구조적으로 보장된다. 즉 음수는 '나쁜
+# 조건' 이 아니라 '모형이 모르는 영역' 이고, 위반으로 읽으면 쓸 수 있는
+# 후보를 버린다. 이 사례는 그 분류가 실제로 작동하는지를 **모형 파일 없이**
+# 확인한다. 번들을 손으로 만들어 예측값을 직접 정한다.
+
+# --- 판정 함수의 진리표 (음성 대조 포함) ---------------------------------
+chk(RC.constraint_verdict(True, True, False) == RC.VERDICT_PASS,
+    "두 축 만족이고 범위 안이면 통과")
+chk(RC.constraint_verdict(False, True, False) == RC.VERDICT_FAIL,
+    "범위 안에서 한 축이 미달이면 위반")
+chk(RC.constraint_verdict(True, True, True) == RC.VERDICT_UNDET,
+    "만족해 보여도 범위 밖이 섞이면 판정 불가",
+    "이것이 빠지면 근거 없는 합격이 나온다")
+chk(RC.constraint_verdict(False, False, True) == RC.VERDICT_UNDET,
+    "미달로 보여도 범위 밖이 섞이면 판정 불가",
+    "이것이 13주차에 실제로 틀렸던 분기다")
+chk(RC.VERDICT_ORDER[RC.VERDICT_PASS] > RC.VERDICT_ORDER[RC.VERDICT_UNDET]
+    > RC.VERDICT_ORDER[RC.VERDICT_FAIL],
+    "정렬 순서가 통과 > 판정 불가 > 위반")
+chk(RC.LABEL_PHYSICAL_MIN["nils"] == 0.0
+    and RC.LABEL_PHYSICAL_MIN["cd_3sigma"] == 0.0,
+    "물리 하한이 두 라벨에 0 으로 박혀 있다")
+
+
+# --- evaluate 종단 확인 : 번들을 손으로 만든다 ---------------------------
+class _ConstModel:
+    """입력과 무관하게 상수를 돌려주는 모형. 예측값을 직접 정하기 위한 것."""
+
+    def __init__(self, value: float) -> None:
+        self.value = float(value)
+
+    def predict(self, X):
+        return np.full(len(X), self.value, dtype=np.float64)
+
+
+def _stub_bundles(nils_value: float, cd3_value: float = 1.0) -> dict:
+    """`evaluate` 가 요구하는 모양의 번들. 상자는 전부 통과하도록 넓게 둔다."""
+    axes = {f: {"min": -1e9, "max": 1e9, "p01": -1e9, "p99": 1e9}
+            for f in _F24}
+    dom = {"axes": axes}
+    out = {}
+    for lab, val in (("cd_error", 0.0), ("nils", nils_value),
+                     ("cd_3sigma", cd3_value)):
+        out[lab] = {"model": _ConstModel(val), "features": list(_F24),
+                    "domain": dom}
+    return out
+
+
+_F24 = ["na", "sigma_out", "pitch", "duty", "defocus", "dose_rel",
+        "flare", "msd_nm", "blur_nm", "z6", "z11"]
+_SPEC24 = DS.SampleSpec(pitch=250.0, duty=0.5, polarization="TE",
+                        source_shape="conventional", mask_type="binary")
+_BASE24 = {"na": 1.0, "sigma_out": 0.45, "pitch": 250.0, "duty": 0.5,
+           "defocus": 0.0, "dose_rel": 1.0, "flare": 0.02, "msd_nm": 2.0,
+           "blur_nm": 10.0, "z6": 0.02, "z11": 0.0}
+_FOCUS24 = np.linspace(-150.0, 150.0, 11)
+_DOSE24 = np.linspace(0.95, 1.05, 11)
+
+
+def _ev24(nils_value: float, cd3_value: float = 1.0) -> dict:
+    return RC.evaluate(_stub_bundles(nils_value, cd3_value), _BASE24, _F24,
+                       _SPEC24, _FOCUS24, _DOSE24, rel_p95=0.02)
+
+
+_pos = _ev24(+5.0)          # 물리 범위 안, 제약 만족
+_neg = _ev24(-1.5)          # 물리 범위 밖 (음수 NILS)
+_low = _ev24(+0.5)          # 범위 안이지만 min_nils 미달
+_c3n = _ev24(+5.0, -0.3)    # cd_3sigma 가 음수
+
+chk(_pos["ok"] and _neg["ok"] and _low["ok"] and _c3n["ok"],
+    "네 경우 모두 상자 안에서 평가된다")
+chk(_pos["verdict"] == RC.VERDICT_PASS,
+    "범위 안이고 제약을 만족하면 통과")
+chk(_neg["verdict"] == RC.VERDICT_UNDET,
+    "음수 NILS 예측이면 판정 불가",
+    f"받은 값 {_neg['verdict']}")
+chk(_low["verdict"] == RC.VERDICT_FAIL,
+    "범위 안에서 NILS 가 모자라면 위반 (판정 불가가 아니다)",
+    "이 구분이 없으면 모든 미달이 판정 불가가 되어 관문이 사라진다")
+chk(_c3n["verdict"] == RC.VERDICT_UNDET,
+    "음수 cd_3sigma 예측도 판정 불가")
+chk(_neg["n_out_of_range"] == _neg["n_window"] and _neg["n_window"] > 0,
+    "범위 밖 점 수를 창 안에서 센다")
+chk(abs(_neg["frac_out_of_range"] - 1.0) < 1e-12,
+    "전부 음수면 범위 밖 비율이 1.0")
+chk(_pos["n_out_of_range"] == 0 and _pos["frac_out_of_range"] == 0.0,
+    "정상 예측이면 범위 밖이 0 이다 (가짜 경보 없음)")
+chk(_neg["undetermined_constraint"] and not _pos["undetermined_constraint"],
+    "판정 불가 표시가 두 경우에서 갈린다")
+
+# --- 분위수 기준을 나란히 재는가 -----------------------------------------
+chk(all(k in _pos for k in ("nils_q", "cdu_q", "verdict_q",
+                            "nils_quantile", "cdu_quantile")),
+    "분위수 기준을 최솟값 기준과 함께 돌려준다",
+    "최솟값 기준을 지우면 12주차와 비교할 수 없게 된다")
+chk("nils_min" in _pos and "cdu_max" in _pos,
+    "최솟값·최댓값 기준이 사라지지 않았다")
+chk(RC.NILS_QUANTILE < 50.0 < RC.CDU_QUANTILE,
+    "NILS 는 낮은 분위수, CDU 는 높은 분위수를 쓴다")
+_ev_src24 = inspect.getsource(RC.evaluate)
+chk("np.nanpercentile" in _ev_src24,
+    "분위수를 실제로 계산한다 (상수를 적어 둔 것이 아니다)")
+
+# --- [14 차 보완 104 번] CD 는 창을 만드는 값이라 격자 전체에서 센다 -----
+# 창 안에서는 CD 가 목표 근처라 음수가 닿지 않는다. 그런데 창 **자체**가
+# CD 예측으로 그려지므로, 불가능한 CD 는 창을 좁히거나 비우고 그 원인이
+# 어디에도 남지 않는다. 그래서 격자 전체에서 따로 센다.
+chk(RC.LABEL_PHYSICAL_MIN["cd"] == 0.0,
+    "CD 의 물리 하한이 박혀 있다")
+chk("n_cd_bad_grid" in _ev_src24 and "m[\"cd\"] <= cd_floor" in _ev_src24,
+    "CD 음수를 격자 전체에서 센다 (창 안에서만 세지 않는다)")
+chk(all(k in _pos for k in ("n_cd_below_zero", "n_cd_below_zero_grid",
+                            "n_grid", "empty_window")),
+    "CD 범위 밖 개수와 격자 크기를 돌려준다")
+chk(_pos["n_grid"] == len(_FOCUS24) * len(_DOSE24),
+    "격자 크기가 초점 x 노광 점 수와 같다")
+chk(_pos["n_cd_below_zero_grid"] == 0,
+    "정상 예측이면 CD 음수가 0 이다")
+
+# CD 를 목표 아래로 크게 내려 격자 전체를 음수로 만든다.
+class _NegCD:
+    """cd_error 를 크게 음수로 돌려줘 CD <= 0 을 만든다."""
+
+    def predict(self, X):
+        return np.full(len(X), -1.0e4, dtype=np.float64)
+
+
+def _ev_negcd() -> dict:
+    bb = _stub_bundles(+5.0)
+    bb["cd_error"] = dict(bb["cd_error"])
+    bb["cd_error"]["model"] = _NegCD()
+    return RC.evaluate(bb, _BASE24, _F24, _SPEC24, _FOCUS24, _DOSE24,
+                       rel_p95=0.02)
+
+
+_ncd = _ev_negcd()
+chk(_ncd["ok"], "CD 가 음수여도 평가 자체는 수행된다")
+chk(_ncd["n_cd_below_zero_grid"] == _ncd["n_grid"],
+    "격자 전부가 CD <= 0 으로 세어진다",
+    f"받은 값 {_ncd['n_cd_below_zero_grid']}/{_ncd['n_grid']}")
+chk(_ncd["empty_window"],
+    "불가능한 CD 때문에 창이 비었다")
+chk(_ncd["verdict"] == RC.VERDICT_UNDET,
+    "창이 비었고 원인이 불가능한 CD 면 판정 불가",
+    "이것이 '위반' 으로 적히면 모형 실패가 조건 탓이 된다")
+chk(not _ncd["empty_window_unexplained"],
+    "그 빈 창은 설명된 빈 창이다")
+chk(_pos["empty_window_unexplained"] is False,
+    "창이 있으면 '설명 안 되는 빈 창' 이 아니다")
+# 음성 대조 : 예측이 전부 물리 범위 안인데 창이 비면 그것은 위반이다.
+# (조건 자체의 성질이지 모형 실패가 아니다.)
+_src104 = inspect.getsource(RC.evaluate)
+chk("empty_window_unexplained = bool(n_win == 0 and n_cd_bad_grid == 0)"
+    in _src104,
+    "설명 안 되는 빈 창은 판정 불가로 올리지 않는다",
+    "모든 빈 창을 판정 불가로 만들면 관문이 사라진다")
+
+# --- 되돌림 쪽이 이 판정을 그대로 쓰는가 ----------------------------------
+_rt24 = inspect.getsource(RT.report_tool)
+chk("RC.VERDICT_PASS" in _rt24,
+    "되돌림의 통과 정의가 추천기 상수를 그대로 쓴다",
+    "문자열을 따로 적으면 한쪽만 바뀌어 조용히 어긋난다")
+chk("판정불가" in _rt24 or "판정 불가" in _rt24,
+    "되돌림 표에 판정 불가가 인쇄된다")
+_pick24 = inspect.getsource(RT.pick_candidates)
+chk("RC.VERDICT_UNDET" in _pick24,
+    "후보 뽑기가 판정 불가를 따로 다룬다",
+    "되돌려 재는 것이 판정 불가를 해소하는 가장 값싼 수단이다")
+
+
+
+# ---------------------------------------------------------------------------
+head(25, "보수 윈도는 공칭 윈도의 부분집합이다")
+# [14 차 보완 106 번] 안 걸려 있던 구조적 불변량.
+#
+#   guarded_tol = pw_tol - rel_p95 < pw_tol
+#
+# 이므로 보수 창의 통과 집합은 공칭 창의 **부분집합**이다. 따라서 DOF,
+# 전체 창 넓이, 통과 점 수 모두 보수 쪽이 클 수 없다. 이것이 깨지면 격자
+# 보간이나 EL 축 처리가 어긋난 것이고, 추천기는 '오차를 떼었더니 창이
+# 넓어졌다' 는 불가능한 숫자를 인쇄하게 된다.
+#
+# 모형이 필요 없다. 합성 Bossung 행렬 하나로 `window_metrics` 를 직접 두
+# 공차에서 부른다.
+
+_tgt25 = 125.0
+_dose25 = np.linspace(0.90, 1.10, 41)
+_foc25 = np.linspace(-200.0, 200.0, 41)
+# CD = target * (1 + s(dose-1) - K focus^2) : 교과서 Bossung 모양
+_S25, _K25 = 1.36, 1.2e-6
+_cd25 = _tgt25 * (1.0
+                  + _S25 * (_dose25[:, None] - 1.0)
+                  - _K25 * (_foc25[None, :] ** 2))
+
+_wide = RC.window_metrics(_cd25, _tgt25, 0.0707, _dose25, _foc25, 10.0)
+_narrow = RC.window_metrics(_cd25, _tgt25, 0.0507, _dose25, _foc25, 10.0)
+
+chk(_narrow["n_pass"] <= _wide["n_pass"],
+    "공차를 좁히면 통과 점 수가 늘지 않는다",
+    f"{_narrow['n_pass']} > {_wide['n_pass']}")
+chk(_narrow["dof"] <= _wide["dof"] + 1e-9,
+    "공차를 좁히면 DOF 하한이 늘지 않는다",
+    f"{_narrow['dof']:.3f} > {_wide['dof']:.3f}")
+chk(_narrow["total"] <= _wide["total"] + 1e-9,
+    "공차를 좁히면 전체 창 넓이가 늘지 않는다")
+chk(_wide["dof"] <= _wide["dof_upper"] + 1e-9
+    and _narrow["dof"] <= _narrow["dof_upper"] + 1e-9,
+    "DOF 하한이 상한을 넘지 않는다")
+
+# 음성 대조 : 공차 순서를 뒤집으면 위 비교가 **깨져야** 한다. 깨지지
+# 않으면 두 공차가 같은 창을 주고 있다는 뜻이고, 시험이 아무것도 재지
+# 않는 것이다.
+chk(_wide["n_pass"] > _narrow["n_pass"],
+    "두 공차가 실제로 다른 창을 준다 (시험이 비어 있지 않다)",
+    "같으면 위 네 항목이 자동 통과라 검출력이 0 이다")
+
+# `evaluate` 가 그 두 창을 실제로 그렇게 쓰는지도 본다.
+_ev25 = _ev24(+5.0)
+chk(_ev25["guarded"]["dof"] <= _ev25["nominal"]["dof"] + 1e-9,
+    "evaluate 가 돌려주는 보수 DOF 가 공칭 DOF 를 넘지 않는다")
+chk(_ev25["guarded"]["tol"] < _ev25["nominal"]["tol"],
+    "보수 공차가 공칭 공차보다 작다",
+    "이 전제가 깨지면 위 불변량 자체가 성립하지 않는다")
+
+
+
+# ---------------------------------------------------------------------------
+head(26, "예측 프로파일의 물리 범위를 세는가")
+# [14 차 보완 105 번] 세기는 |E|^2 이라 음수가 불가능하다. 예측은 주성분
+# 재구성이라 음수가 나올 수 있고, 음수 프로파일에서도 임계값 교차는 멀쩡히
+# 계산되어 **불가능한 프로파일에서 뽑은 CD** 가 정상 숫자처럼 보고된다.
+#
+# 이 구간은 `train <= 100` 이거나 `val < 20` 이면 통째로 건너뛴다. 그래서
+# 세는 일을 순수 함수로 빼 두었고, 여기서 직접 부른다. 그러지 않으면
+# **시험할 수 없는 코드**가 된다(소규모 데이터셋으로는 한 번도 안 돈다).
+
+chk(TS.PROFILE_PHYSICAL_MIN == 0.0, "세기의 물리 하한이 0 으로 박혀 있다")
+
+_pt26 = np.array([[0.0, 0.2, 1.0, 0.2],
+                  [0.1, 0.5, 0.9, 0.3]], dtype=float)      # 참 : 전부 0 이상
+_pp_ok = np.array([[0.01, 0.21, 0.99, 0.19],
+                   [0.11, 0.49, 0.91, 0.31]], dtype=float)  # 예측 : 정상
+_pp_neg = np.array([[-0.05, 0.21, 0.99, 0.19],
+                    [0.11, -0.30, 0.91, 0.31]], dtype=float)  # 예측 : 음수 둘
+
+_r_ok = TS.profile_physical_range(_pt26, _pp_ok)
+_r_ng = TS.profile_physical_range(_pt26, _pp_neg)
+
+chk(_r_ok["n_negative_points"] == 0 and _r_ok["frac_negative"] == 0.0,
+    "정상 예측이면 음수 0 이다 (가짜 경보 없음)")
+chk(_r_ng["n_negative_points"] == 2,
+    "음수 점 수를 정확히 센다", f"받은 값 {_r_ng['n_negative_points']}")
+chk(_r_ng["n_negative_profiles"] == 2,
+    "음수가 섞인 프로파일 수를 센다 (점 수와 다른 양이다)")
+chk(abs(_r_ng["worst_negative"] - (-0.30)) < 1e-12,
+    "최솟값을 돌려준다")
+chk(abs(_r_ng["frac_negative"] - 2.0 / 8.0) < 1e-12,
+    "비율이 점 수 / 전체 점 수다")
+chk(_r_ng["n_negative_true"] == 0,
+    "참 프로파일의 음수를 따로 센다 (이 경우 0)")
+
+# 참 프로파일에도 음수가 있으면 원인이 다르다. 둘을 가르지 않으면 데이터
+# 생성 문제를 재구성 탓으로 잘못 짚는다.
+_pt_bad = _pt26.copy()
+_pt_bad[0, 0] = -0.01
+_r_bad = TS.profile_physical_range(_pt_bad, _pp_ok)
+chk(_r_bad["n_negative_true"] == 1 and _r_bad["n_negative_points"] == 0,
+    "참 쪽 음수와 예측 쪽 음수를 갈라서 센다",
+    "가르지 않으면 데이터 문제를 재구성 탓으로 읽는다")
+
+# 호출부가 이 함수를 실제로 쓰는지 (출력만 고치고 세는 쪽이 낡는 것을 막는다)
+_rp26 = inspect.getsource(TS.run_profiles)
+chk("profile_physical_range(" in _rp26,
+    "run_profiles 가 그 함수를 부른다")
+chk("판정" not in _rp26.split("profile_physical_range(")[1][:400],
+    "이 값으로 판정하지 않는다 (지표로만 쓴다)")
+
+
+
+# ---------------------------------------------------------------------------
+head(27, "학습 데이터가 제약 경계에서 잘리지 않는가")
+# [14 차 보완 107 번] 13 주차까지 데이터 생성이 **적격 영역 안에서만**
+# 표본을 뽑았다. 그래서 학습 데이터의 NILS 최솟값이 문턱(2.121) 바로 위
+# 2.1317 에서 끊겼고 **문턱 아래 행이 0 건**이었다. 그 모형에게 "NILS 가
+# 문턱 이상인가" 를 묻고 있었다. 경계의 한쪽만 보고 경계를 판정하라는
+# 것이고, 103 번(음수 NILS 60.2 %)이 그 결과다.
+
+_fr27 = inspect.getsource(CP13.feasible_region)
+chk("formed_bounds" in _fr27 and "np.isfinite(nils_map)" in _fr27,
+    "사전 탐색이 **형성 경계**를 함께 낸다",
+    "적격 경계만 쓰면 품질 미달 행이 한 건도 생성되지 않는다")
+chk("formed_map" in _fr27,
+    "형성 여부 맵을 버리지 않고 돌려준다 (108 번 분류기의 학습 자료)")
+
+_dg27 = inspect.getsource(CP13.design_grid)
+chk('extent' in _dg27 and 'formed_bounds' in _dg27,
+    "격자를 형성 영역까지 넓힐 수 있다")
+chk('"pass"' in _dg27,
+    "옛 설계(적격 영역만)도 그대로 고를 수 있다",
+    "재현할 수 없으면 수정 효과와 표본 효과를 가를 수 없다")
+
+_rc27 = inspect.getsource(CP13.run_campaign)
+chk("keep_formed" in _rc27 and 'q.get("formed")' in _rc27,
+    "형성된 행은 품질 미달이어도 보관할 수 있다")
+chk('"ok": np.asarray(elig, dtype=bool)' in _rc27,
+    "적격 여부를 **행별로** 기록한다",
+    "옛 판은 상수 True 였다. 띠가 섞이면 행마다 달라져야 한다")
+
+# --- 경계가 임의 상수가 아니라 물리라는 것 --------------------------------
+# `screen_condition` 은 미형성과 dose-to-size 실패에만 NaN 을 주고, 품질
+# 미달에는 실제 NILS 를 준다. 그래서 `isfinite` 가 곧 형성 여부다. 이
+# 성질이 깨지면 형성 경계가 조용히 틀어진다.
+_sc27 = inspect.getsource(CP13.screen_condition)
+chk('"nils": np.nan' in _sc27,
+    "미형성·dose-to-size 실패에는 NILS 를 NaN 으로 준다")
+chk('det["nils"] < spec.min_nils' in _sc27
+    and 'return {"pass": False, "nils": det["nils"]' in _sc27,
+    "품질 미달에는 **실제 NILS 값**을 준다 (NaN 이 아니다)",
+    "여기서 NaN 을 주면 형성 경계가 적격 경계로 쪼그라든다")
+
+# --- 형성 경계는 적격 경계를 포함한다 (음성 대조 포함) --------------------
+_dzs27 = np.linspace(-100.0, 100.0, 9)
+_drs27 = np.linspace(0.8, 1.2, 9)
+_nmap = np.full((9, 9), np.nan)
+_nmap[2:7, 2:7] = 1.0          # 형성 영역
+_nmap[3:6, 3:6] = 5.0          # 그 안쪽이 적격
+_pmap = _nmap >= 2.121
+_formed27 = np.isfinite(_nmap)
+_fi, _fj = np.where(_formed27)
+_pi, _pj = np.where(_pmap)
+chk(_dzs27[_fj.min()] <= _dzs27[_pj.min()]
+    and _dzs27[_fj.max()] >= _dzs27[_pj.max()],
+    "형성 경계가 적격 경계를 포함한다")
+chk(_formed27.sum() > _pmap.sum(),
+    "형성 영역이 적격 영역보다 넓다 (시험이 비어 있지 않다)",
+    "같으면 띠가 0 이라 위 비교가 자동 통과한다")
+
+
+# ---------------------------------------------------------------------------
+head(28, "형성 분류기가 미형성 영역을 덮는가")
+# [14 차 보완 108 번] 미형성 영역에는 **회귀 라벨이 없다.** CD 가 없으니
+# NILS 도 없다. 그래서 회귀로는 끝내 덮을 수 없고, 질의가 거기로 가면
+# 모형이 외삽해서 음수 NILS 를 뱉는다. 형성 여부 **자체**는 모든 점에서
+# 정해지므로 분류로 덮는다.
+
+_tf28 = inspect.getsource(TS.train_formed_classifier)
+chk("ys.all() or (~ys).all()" in _tf28,
+    "한 부류뿐이면 학습을 **거부**한다",
+    "상수를 배우고도 정확도는 높게 나온다. 59·101 번과 같은 함정이다")
+chk("false_formed" in _tf28 and "false_unformed" in _tf28,
+    "오류를 두 방향으로 갈라서 보고한다",
+    "미형성을 형성이라 하면 회귀가 외삽하고, 반대는 쓸 수 있는 후보를 버린다")
+chk("screen_" in _tf28 and "섞지" in _tf28,
+    "회귀 라벨과 섞지 않는다는 것을 코드에 적어 두었다")
+
+# --- 추천기 쪽 2 단계 관문 -----------------------------------------------
+_pf28 = inspect.getsource(RC.predict_formed)
+chk("feat.index(f)" in _pf28 and "return None" in _pf28,
+    "학습 때와 입력 열이 다르면 분류기를 **쓰지 않는다**",
+    "열을 맞춰 끼우면 조용히 엉뚱한 값이 들어간다")
+_ev28 = inspect.getsource(RC.evaluate)
+chk("predict_formed(" in _ev28, "evaluate 가 1 단계를 부른다")
+chk("n_unformed_win" in _ev28 and "n_bad = " in _ev28
+    and "n_unformed_win" in _ev28.split("n_bad = ")[1][:120],
+    "창 안의 '미형성' 점이 판정 불가로 이어진다")
+chk('"formed_stage"' in _ev28,
+    "1 단계를 **묻지 않은 것**과 0 건인 것을 구분한다",
+    "구분하지 않으면 덮이지 않은 영역이 덮인 것처럼 보인다")
+
+_main28 = inspect.getsource(RC)
+chk("1 단계 형성 분류기] **없다.**" in _main28,
+    "분류기가 없으면 없다고 인쇄한다 (조용히 넘어가지 않는다)")
+_rt28 = inspect.getsource(RT)
+chk("load_formed_classifier" in _rt28,
+    "되돌림도 같은 2 단계 관문을 쓴다",
+    "다른 관문으로 재면 추천기와 비교가 성립하지 않는다")
+
+# --- 분류기 동작 (모형 파일 없이) ----------------------------------------
+class _ClfStub:
+    """defocus 가 0 에서 멀면 미형성이라고 하는 분류기."""
+
+    def predict(self, X):
+        return np.abs(X[:, 0]) < 80.0
+
+
+_clf28 = {"model": _ClfStub(), "features": ["defocus"],
+          "n_points": 1000, "formed_rate": 0.4, "auc": 0.9}
+_X28 = np.array([[0.0], [50.0], [100.0], [200.0]], dtype=float)
+_got28 = RC.predict_formed(_clf28, _X28, ["defocus"])
+chk(_got28 is not None and list(_got28) == [True, True, False, False],
+    "분류기 예측이 그대로 전달된다")
+chk(RC.predict_formed(None, _X28, ["defocus"]) is None,
+    "분류기가 없으면 None 이다 (0 건이 아니다)")
+chk(RC.predict_formed(_clf28, _X28, ["dose_rel"]) is None,
+    "열 이름이 안 맞으면 None 이다 (끼워 맞추지 않는다)")
+
+# --- 분류기 학습 자체를 돌려 본다 ----------------------------------------
+# [105 번의 교훈] 이 함수는 선별 맵이 200 점 이상일 때만 돈다. 소규모
+# 데이터셋으로는 한 번도 실행되지 않아 **시험할 수 없는 코드**가 된다.
+# 그래서 합성 데이터셋으로 직접 부른다.
+_ck28 = list(_F24)
+_rng28 = np.random.default_rng(28)
+_n28 = 900
+_Xs28 = np.column_stack([
+    np.full(_n28, 1.25),                       # na
+    np.full(_n28, 0.6),                        # sigma_out
+    np.full(_n28, 250.0),                      # pitch
+    np.full(_n28, 0.5),                        # duty
+    _rng28.uniform(-200, 200, _n28),           # defocus
+    _rng28.uniform(0.85, 1.15, _n28),          # dose_rel
+    np.full(_n28, 0.02), np.full(_n28, 2.0), np.full(_n28, 10.0),
+    np.full(_n28, 0.02), np.zeros(_n28),
+])
+# 초점이 0 에서 멀면 미형성. 분류기가 배워야 할 단순한 경계다.
+_ys28 = np.abs(_Xs28[:, 4]) < 110.0
+_d28 = {"screen_conditions": _Xs28, "screen_formed": _ys28,
+        "files": ["screen_conditions", "screen_formed"]}
+
+
+class _DictDS(dict):
+    """`getattr(d, "files", None)` 를 쓰는 코드 경로를 그대로 타게 한다."""
+
+    @property
+    def files(self):
+        return [k for k in self if k != "files"]
+
+
+_rep28 = TS.train_formed_classifier(_DictDS(_d28), _ck28, ["defocus"],
+                                    np.zeros(1, dtype=bool), quick=True)
+chk(_rep28.get("available") is True,
+    "합성 선별 맵으로 분류기가 학습된다",
+    f"사유 {_rep28.get('reason')}")
+chk(_rep28.get("auc", 0.0) > 0.95,
+    "배우기 쉬운 경계에서 AUC 가 높다",
+    f"받은 값 {_rep28.get('auc')}")
+chk("model" in _rep28 and hasattr(_rep28["model"], "predict"),
+    "학습된 모형을 돌려준다")
+chk(_rep28["n_points"] == _n28 and 0.0 < _rep28["formed_rate"] < 1.0,
+    "학습 점 수와 형성 비율을 기록한다")
+chk(set(("false_formed", "false_unformed", "n_test")) <= set(_rep28),
+    "오류를 두 방향으로 갈라서 돌려준다")
+
+# 음성 대조 : 한 부류만 주면 **거부해야** 한다. 거부하지 않으면 상수를
+# 배우고도 정확도 100 % 가 나와 시험이 초록색이 된다.
+_d28_one = _DictDS({"screen_conditions": _Xs28,
+                    "screen_formed": np.ones(_n28, dtype=bool)})
+_rep_one = TS.train_formed_classifier(_d28_one, _ck28, ["defocus"],
+                                      np.zeros(1, dtype=bool), quick=True)
+chk(_rep_one.get("available") is False and "한 부류" in _rep_one.get("reason", ""),
+    "한 부류뿐이면 학습을 거부한다",
+    "거부하지 않으면 아무것도 못 가리면서 정확도만 높게 나온다")
+
+# 선별 맵이 아예 없는 옛 데이터셋이면 사유를 적고 넘어간다.
+_rep_none = TS.train_formed_classifier(_DictDS({"conditions": _Xs28}),
+                                       _ck28, ["defocus"],
+                                       np.zeros(1, dtype=bool), quick=True)
+chk(_rep_none.get("available") is False,
+    "선별 맵이 없으면 학습하지 않고 사유를 돌려준다")
+
+
+# ---------------------------------------------------------------------------
+head(29, "--eligible-only 가 실제로 행을 자르는가")
+
+# 왜 이 사례가 생겼나 : PC 실측에서 `--eligible-only` 가 아무 일도 하지 않고
+# 지나갔다. 행 수를 `max(keep) + 1` 로 짐작했고, 꼬리 행이 띠였기 때문이다.
+# 자르지 못한 것이 cd_error 파생 실패로 **드러난 것은 운**이었다.
+_n29 = 10
+_keep29 = np.array([0, 1, 2, 3, 4], dtype=np.int64)   # 꼬리 5 행이 띠
+_d29 = {
+    "conditions": np.arange(_n29 * 2, dtype=np.float64).reshape(_n29, 2),
+    "target_cd": np.arange(_n29, dtype=np.float64) + 100.0,
+    "split_train": np.array([0, 1, 2, 7, 8], dtype=np.int64),
+    "split_val": np.array([3], dtype=np.int64),
+    "split_test": np.array([4, 9], dtype=np.int64),
+    "screen_conditions": np.zeros((77, 2)),           # 행 축이 다르다
+    "scalar": np.float64(3.0),
+}
+_s29 = TS._subset_dataset(_d29, _keep29, _n29)
+
+chk(_s29["target_cd"].shape[0] == len(_keep29),
+    "행 배열이 keep 길이로 잘린다",
+    "꼬리가 전부 빠져도 잘려야 한다. 이것이 PC 에서 실패한 바로 그 지점이다")
+chk(np.allclose(_s29["target_cd"], np.arange(5.0) + 100.0),
+    "잘린 값이 keep 순서와 맞는다")
+chk(_s29["screen_conditions"].shape[0] == 77,
+    "screen_ 접두 배열은 건드리지 않는다",
+    "선별 맵은 행 축이 달라 같이 자르면 조용히 망가진다")
+chk(np.asarray(_s29["scalar"]).shape == (),
+    "행 축이 없는 값은 그대로 둔다")
+chk(_s29["split_train"].tolist() == [0, 1, 2]
+    and _s29["split_val"].tolist() == [3]
+    and _s29["split_test"].tolist() == [4],
+    "분할 인덱스를 새 행 번호로 다시 매기고 빠진 행은 버린다",
+    "매핑하지 않으면 분할이 엉뚱한 행을 가리키는데 프로그램은 멀쩡히 돈다")
+
+_raised29 = False
+try:
+    TS._subset_dataset(_d29, np.array([0, 99], dtype=np.int64), _n29)
+except ValueError:
+    _raised29 = True
+chk(_raised29, "행 수를 넘는 keep 은 거부한다",
+    "넘겨받은 n_old 가 틀렸다는 뜻이므로 조용히 돌면 안 된다")
+
+chk("n_old" in _tr[_tr.index("def _subset_dataset"):
+                   _tr.index("def _subset_dataset") + 400],
+    "행 수를 짐작하지 않고 인수로 받는다",
+    "max(keep)+1 은 마지막 행이 적격일 때만 맞는 짐작이었다")
+
+
+# ---------------------------------------------------------------------------
+head(30, "형성 분류기 파일을 접두사가 달라도 찾는가")
+
+# 왜 이 사례가 생겼나 : 회귀 번들은 models/s_mlp_*, 분류기는 models/s_formed
+# 이다. 접두사가 한 칸 다르다. 한 곳만 보다가, 분류기를 제대로 저장해 두고도
+# 추천기가 '1 단계 없다' 를 인쇄했다. 없는 것과 못 찾는 것은 다른 상태다.
+_p30 = RC.formed_paths("models/s_mlp")
+chk("models/s_mlp_formed.joblib" in _p30, "준 접두사 그대로 먼저 본다")
+chk("models/s_formed.joblib" in _p30,
+    "모형 종류 꼬리표를 떼고 한 번 더 본다",
+    "train_surrogate 는 --save-model 접두사에 저장하므로 한 칸 짧다")
+chk(_p30.index("models/s_mlp_formed.joblib")
+    < _p30.index("models/s_formed.joblib"),
+    "정확히 맞는 경로를 먼저 본다")
+chk(RC.formed_paths("models/s") == ["models/s_formed.joblib"],
+    "꼬리표가 모형 종류가 아니면 떼지 않는다",
+    "아무 꼬리표나 떼면 엉뚱한 파일을 집는다")
+chk(RC.formed_paths("models/s_nils") == ["models/s_nils_formed.joblib"],
+    "라벨 이름을 모형 종류로 오해하지 않는다")
+chk(all("models/a_formed.joblib" in RC.formed_paths(f"models/a_{_k}")
+        for _k in RC.MODEL_PREF),
+    "모형 종류 세 가지 모두에서 떼어 낸다")
+chk(RC.load_formed_classifier("없는경로/아무것도") is None,
+    "둘 다 없으면 None 을 돌려준다")
+
+_rc30 = open("recommend.py", encoding="utf-8").read()
+chk("찾아본 곳" in _rc30,
+    "못 찾았을 때 찾아본 경로를 인쇄한다",
+    "경로를 안 적으면 '없다' 와 '못 찾았다' 가 화면에서 구별되지 않는다")
+
+
+# ---------------------------------------------------------------------------
+head(31, "실행기가 추천기 출력을 올바로 읽는가")
+
+# 왜 이 사례가 생겼나 : 실행기(w14.py)가 '분류기 없음' 을 두 토막으로 찾았다
+# (`"1 단계 형성 분류기" in txt and "없다" in txt`). 같은 출력 안의 다른
+# 문장 "보수 창이 아예 없다는 뜻이다" 에 걸려, 분류기를 **제대로 찾았는데도**
+# 실행기가 멈췄다. 상태를 판정하는 조건이 그 상태를 가리키지 않은 것이다.
+RC_SRC31 = open("recommend.py", encoding="utf-8").read()
+import importlib.util as _ilu31
+_sp31 = _ilu31.spec_from_file_location("w14mod", "w14.py")
+_W31 = _ilu31.module_from_spec(_sp31)
+_sp31.loader.exec_module(_W31)
+
+_ok31 = """  [1 단계 형성 분류기] 있음. 학습 점 63,798 (형성 52.6 %), AUC 0.9961
+    창 안에서 '미형성' 으로 본 점 5. 그 후보는 판정 불가다.
+  - 보수 하한이 0 이면 모형 오차를 떼면 윈도가 남지 않는다는 뜻이다.
+  이 0 이면 보수 창이 아예 없다는 뜻이다."""
+_ng31 = """  [1 단계 형성 분류기] **없다.** 찾아본 곳 : models/s_mlp_formed.joblib
+    미형성 영역에는 회귀 라벨이 없으므로, 질의가 거기로"""
+
+chk(_W31.formed_missing(_ok31) is False,
+    "'있음' 이면 못 찾았다고 하지 않는다",
+    "실제로 걸렸던 출력이다. 같은 글에 '없다' 가 세 번 더 들어 있다")
+chk(_W31.formed_missing(_ng31) is True,
+    "'**없다.**' 면 못 찾았다고 한다")
+chk(_W31.formed_missing("보수 창이 아예 없다는 뜻이다") is False,
+    "분류기와 무관한 '없다' 에는 걸리지 않는다",
+    "두 토막을 따로 찾으면 여기서 걸린다")
+chk(_W31.FORMED_OK in RC_SRC31 and _W31.FORMED_NG.replace("**", "") in
+    RC_SRC31.replace("**", ""),
+    "실행기가 찾는 문구가 추천기가 실제로 찍는 문구와 같다",
+    "한쪽만 고치면 조용히 어긋난다. 양쪽을 대조한다")
+
+# [113 번] 성공·실패를 **글에서** 찾으면 안 된다. 실제로 난 사고 :
+# 484/484 전부 통과한 실행에서 "검사 11 개 중 실패 0 개" 가 찍혔고,
+# `"검사 11 개 중 실패" in txt` 가 그것에 걸려 성공을 실패로 읽었다.
+_w31src = open("w14.py", encoding="utf-8").read()
+chk("r6.rc != 0" in _w31src,
+    "6 단계가 종료 코드로 성공·실패를 가른다",
+    "글에서 찾으면 '실패 0 개' 에 걸린다")
+# 주석과 설명에는 그 문구가 **남아야 한다**(왜 안 되는지 적은 것이다).
+# 막아야 하는 것은 **비교 연산**이고, 둘은 문자열 검색으로 못 가린다 —
+# Case 22 에서 clip 으로 같은 함정을 밟았다. 구문 나무로 본다.
+_t113 = _ast.parse(_w31src)
+_bad113 = [n for n in _ast.walk(_t113)
+           if isinstance(n, _ast.Compare)
+           and any(isinstance(o, _ast.In) for o in n.ops)
+           and isinstance(n.left, _ast.Constant)
+           and isinstance(n.left.value, str)
+           and "검사 11 개 중 실패" in n.left.value]
+chk(not _bad113,
+    "성공 글에도 들어 있는 토막을 판정에 쓰지 않는다 (구문 나무로 확인)",
+    "주석의 설명은 남고, 비교 연산만 막는다")
+chk("class Run(NamedTuple)" in _w31src and "return Run(text, rc)" in _w31src,
+    "하위 실행이 화면 글과 종료 코드를 함께 돌려준다",
+    "종료 코드는 이미 있는 분명한 신호다. 글에서 다시 찾을 이유가 없다")
+_ok113 = "  총 1333.3 s, 검사 11 개 중 실패 0 개\n\n  -> 전부 0 을 돌려주었다."
+chk("검사 11 개 중 실패" in _ok113,
+    "음성 대조 : 성공 출력에도 그 토막이 실제로 들어 있다",
+    "이것이 옛 조건이 걸린 이유다")
+
+
+# ---------------------------------------------------------------------------
+head(32, "잰 비율을 상수로 박아 두지 않는가")
+
+# 왜 이 사례가 생겼나 : "미형성은 조건 공간의 67.6 %" 를 화면 문구에 **박아**
+# 두었다. 그 값은 옛 소규모 데이터셋에서 한 번 잰 것이고, 10 만 건 실측에서는
+# 47.4 % 였다. claims 는 README 의 주장만 보므로 인쇄 문구의 드리프트를 잡지
+# 못한다. 그래서 다섯 곳에 낡은 숫자가 조용히 남아 있었다.
+# 주석에는 그 경위가 남아야 하므로(왜 뺐는지 적은 것이다) **문자열 상수**만
+# 본다. Case 22·113 과 같은 방식이다.
+import ast as _ast32
+
+def _str_consts32(path):
+    t = _ast32.parse(open(path, encoding="utf-8").read())
+    return [n.value for n in _ast32.walk(t)
+            if isinstance(n, _ast32.Constant) and isinstance(n.value, str)]
+
+for _f32 in ("recommend.py", "train_surrogate.py"):
+    chk(not [v for v in _str_consts32(_f32) if "67.6" in v],
+        f"{_f32} 의 인쇄 문구에 옛 비율 상수가 없다",
+        "데이터셋마다 달라지는 값을 글에 박으면 조용히 낡는다")
+
+_rc32 = open("recommend.py", encoding="utf-8").read()
+chk("formed_rate" in _rc32 and "미형성 {100 * (1 - _fr):.1f} %" in _rc32,
+    "분류기가 있을 때는 번들에 기록된 실측으로 미형성 비율을 찍는다",
+    "구할 수 있는 값을 다시 적지 않는다 (54·109 번과 같은 규칙)")
+chk("그 영역이 얼마나 넓은지는 분류기가 있어야 잴 수 있다" in _rc32,
+    "분류기가 없을 때는 비율을 말하지 않고 못 잰다고 적는다",
+    "모르는 값을 숫자로 적는 것이 드리프트의 시작이다")
+
+# 음성 대조 : 옛 문구를 되살리면 이 검사가 실제로 잡는가
+_fake32 = _rc32.replace('print("    미형성 영역에는 회귀 라벨이 없으므로, 질의가 거기로")',
+                        'print("    미형성 영역(조건 공간의 67.6 %)에는 라벨이 없으므로")')
+_t32 = _ast32.parse(_fake32)
+_hit32 = [n.value for n in _ast32.walk(_t32)
+          if isinstance(n, _ast32.Constant) and isinstance(n.value, str)
+          and "67.6" in n.value]
+chk(bool(_hit32), "음성 대조 : 옛 문구를 되살리면 걸린다",
+    "검사에 탐지 능력이 있다")
+
+
 # ---------------------------------------------------------------------------
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
@@ -1680,10 +2391,10 @@ print("""
    해석      Case 3, 5, 8, 9, 10, 12, 14, 15, 16, 18 — 측정 자체가 뜻을
              갖는 조건.
              음성 대조가 있다.
-   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23 — 코드가 지켜야 하는 관계.
-             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
+   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32 — 코드가 지켜야 하는 관계.
+             Case 24 는 모형 파일 없이 번들을 손으로 만들어 관문을 잰다.\n             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
              꼴과의 **정확** 대조다(시뮬레이션이 아니다).
-   -> 23 개 사례 모두 **실제로 한 번 틀렸던 것**이며, 추측으로 넣은 항목은
+   -> 32 개 사례 모두 **실제로 한 번 틀렸던 것**이며, 추측으로 넣은 항목은
       없다. 물리 모델의 정당성은 여기서 다루지 않는다 (validate.py,
       validate_w12.py, claims.py).""")
 print("=" * 78)

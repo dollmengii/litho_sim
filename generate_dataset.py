@@ -206,6 +206,11 @@ def main():
     ap.add_argument("--confusion", type=float, default=0.25,
                     help="혼동 집합에 배분할 비율. 식별성 평가용으로, 관측 "
                          "선폭이 같아지도록 Dose 를 맞춘 조건 묶음을 만든다")
+    ap.add_argument("--keep-formed", action="store_true",
+                    help=("패턴이 형성된 행을 품질 미달이어도 보관하고, "
+                          "사전 탐색의 형성 여부 맵을 함께 저장한다. "
+                          "[14차 보완 107·108번] 적격 행만 쓰면 문턱 아래 "
+                          "행이 0 건이라 품질 판정을 배울 수 없다."))
     ap.add_argument("--no-split", action="store_true",
                     help="학습/검증 분할 인덱스를 저장하지 않는다")
     ap.add_argument("--confusion-only", action="store_true",
@@ -279,6 +284,8 @@ def main():
     # 1단계 : 조건 공간 사전 탐색 및 계획 수립
     print("\n[1/3] 조건 공간 사전 탐색 (결정론 연산)")
     specs, screen_s, n_skipped, n_refined = [], 0.0, 0, 0
+    screen_cond_all: list = []
+    screen_formed_all: list = []
     if args.confusion_only:
         args.confusion = 1.0
         n_optical = 0
@@ -300,13 +307,30 @@ def main():
             arm_base, n_optical=n_this, n_defocus=N_DEFOCUS, n_dose=N_DOSE,
             space=SPACE, n_coarse=7, seed=args.seed + ai, n_workers=workers,
             progress=Progress("조합"), conditions=conds,
+            extent=("formed" if args.keep_formed else "pass"),
+            keep_screen_maps=args.keep_formed,
         )
         specs += plan["specs"]
         screen_s += plan["screen_s"]
         n_skipped += plan["n_skipped"]
         n_refined += plan["n_refined"]
+        # [108 번] arm 마다 따로 돌므로 **누적**해야 한다. `plan` 은 루프
+        # 변수라, 마지막 arm 것만 저장하면 나머지 arm 의 음성 표본이 통째로
+        # 조용히 사라진다.
+        _sc, _sf = plan.get("screen_conditions"), plan.get("screen_formed")
+        if _sc is not None and len(_sc):
+            screen_cond_all.append(np.asarray(_sc, dtype=np.float64))
+            screen_formed_all.append(np.asarray(_sf, dtype=bool))
     n_lhc = len(specs)
+    screen_cond = (np.concatenate(screen_cond_all, axis=0)
+                   if screen_cond_all
+                   else np.zeros((0, len(DS.CONDITION_KEYS))))
+    screen_fm = (np.concatenate(screen_formed_all, axis=0)
+                 if screen_formed_all else np.zeros(0, dtype=bool))
     print(f"  소요 {_fmt(screen_s)} · 생성 대상 {n_lhc:,} 건")
+    if args.keep_formed and screen_fm.size:
+        print(f"  선별 맵 보관 {screen_fm.size:,} 점 "
+              f"(형성 {100 * screen_fm.mean():.1f} %) -> 형성 분류기용")
     print(f"  적격 영역 없음 {n_skipped} 조합 · 경계 세밀화 {n_refined} 조합")
 
     # 1-b단계 : 혼동 집합
@@ -360,18 +384,29 @@ def main():
         os.remove(CKPT_PATH)
     result = CP.run_campaign(
         specs, n_workers=workers, checkpoint=ckpt, checkpoint_every=200,
-        progress=Progress("샘플"),
+        progress=Progress("샘플"), keep_formed=args.keep_formed,
     )
     n_ok = len(result["conditions"])
-    print(f"  소요 {_fmt(result['elapsed_s'])} · 적격 {n_ok:,} / {len(specs):,} "
+    n_elig = int(result.get("n_eligible", n_ok))
+    n_band = int(result.get("n_band", 0))
+    print(f"  소요 {_fmt(result['elapsed_s'])} · 보관 {n_ok:,} / {len(specs):,} "
           f"({100 * n_ok / len(specs):.1f} %)")
+    if args.keep_formed:
+        # [14 차 보완 107 번] 적격 행만으로는 품질 판정을 배울 수 없다.
+        # 문턱 아래 행이 0 건이면 경계의 한쪽만 보고 경계를 긋게 된다.
+        print(f"  적격 {n_elig:,} · 경계 밖 띠 {n_band:,} "
+              f"(띠 비율 {100 * n_band / max(n_ok, 1):.1f} %)")
+        if n_band == 0:
+            print("  [경고] 띠가 0 건이다. --keep-formed 를 줬는데 품질 미달")
+            print("         행이 하나도 안 잡혔다면 격자가 적격 영역 안에만")
+            print("         머문 것이다. extent='formed' 가 먹었는지 볼 것.")
     rj = result["reject"]
     print("  탈락 : " + ", ".join(
         f"{k} {rj.get(k, 0):,}" for k in
         ("formed", "nils_ok", "cdu_ok", "budget_ok") if k in rj or True))
 
     if n_ok == 0:
-        print("\n적격 샘플이 없습니다.")
+        print("\n보관할 샘플이 없습니다.")
         return
 
     # 3단계 : 저장 및 요약
@@ -384,7 +419,7 @@ def main():
     if not args.no_split:
         ki = result.get("kept_index")
         if ki is None or len(ki) != n_ok:
-            raise RuntimeError("kept_index 가 적격 표본 수와 맞지 않습니다.")
+            raise RuntimeError("kept_index 가 보관 표본 수와 맞지 않습니다.")
         kept = [specs[int(i)] for i in ki]
         try:
             sp = SPL.grouped_split(kept, seed=args.seed)
@@ -402,6 +437,20 @@ def main():
         labels=result["labels"], target_cd=result["target_cd"],
         condition_keys=np.array(DS.CONDITION_KEYS),
         label_keys=np.array(DS.LABEL_KEYS),
+        # [107 번] 행별 적격 여부. 옛 데이터셋에는 이 열이 없다(전부 적격).
+        # 학습 쪽이 없으면 전부 적격으로 간주하도록 되어 있어 뒤호환된다.
+        eligible=np.asarray(result.get("ok"), dtype=bool),
+        # dtype=object 로 저장하면 `allow_pickle=False` 인 안전 로더가
+        # 읽지 못한다. 고정폭 문자열로 둔다 (condition_keys 와 같은 방식).
+        quality_keys=np.array([str(k) for k in
+                               result.get("quality_keys", [])], dtype="<U24"),
+        quality_flags=np.asarray(result.get("quality_flags",
+                                            np.zeros((n_ok, 0))), dtype=bool),
+        # [108 번] 형성 여부 분류기용. 사전 탐색이 이미 쓸어 보고 **버리던**
+        # 맵이라 추가 연산이 0 이다. 결정론 경로 값이므로 회귀 라벨과 섞지
+        # 않는다 -- 이름을 screen_ 으로 분리해 둔 이유가 그것이다.
+        screen_conditions=screen_cond,
+        screen_formed=screen_fm,
         **split_arrays,
     )
     size_mb = os.path.getsize(out_path) / 1024 ** 2
@@ -412,14 +461,15 @@ def main():
         " 데이터셋 생성 요약",
         "=" * 72,
         f"생성 일시        {time.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"적격 샘플        {n_ok:,} / {len(specs):,} ({100 * n_ok / len(specs):.1f} %)",
+        f"보관 샘플        {n_ok:,} / {len(specs):,} ({100 * n_ok / len(specs):.1f} %)",
+        f"  적격 {n_elig:,} · 경계 밖 띠 {n_band:,}",
         f"광학 조건 조합   {n_optical:,} (적격 없음 {n_skipped}, "
         f"세밀화 {n_refined})",
         f"혼동 집합        {len(specs) - n_lhc:,} 건 (비율 {args.confusion:.0%})",
         f"워커             {workers} / 논리 CPU {n_cpu}",
         f"사전 탐색        {_fmt(screen_s)}",
         f"생성             {_fmt(result['elapsed_s'])}",
-        f"적격 1건당       {result['elapsed_s'] / n_ok:.3f} s",
+        f"보관 1건당       {result['elapsed_s'] / n_ok:.3f} s",
         f"파일 크기        {size_mb:.1f} MB",
         "탈락 사유        " + ", ".join(
             f"{k} {result['reject'].get(k, 0):,}" for k in

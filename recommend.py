@@ -93,6 +93,47 @@ from litho import process as PR
 #:   cd_3sigma  : 확률 균일도 제약 (stoch_tol 과 비교)
 LABELS_REQUIRED = ("cd_error", "nils", "cd_3sigma")
 
+#: 라벨이 물리적으로 가질 수 있는 하한. 대리 모형의 예측이 이 밖으로 나가면
+#: 그 값은 '나쁜 조건' 이 아니라 **모형이 모르는 영역** 이다.
+#:
+#: [14 차 보완 103 번] 13주차 되돌림이 보인 것. 후보 289 개 가운데 174 개
+#: (60.2 %) 에서 `nils` 예측이 음수였고, 추천기가 그 값을 범위 검사 없이
+#: 그대로 제약값으로 썼다. `nils` 는 정의가 `CD x |d ln I / dx|` 라 0 이상이
+#: 구조적으로 보장되고(절댓값), 학습 라벨도 전부 0 이상이며, 시뮬레이터로
+#: 재면 늘 양수다. 그래서 음수 예측은 제약 '위반' 으로 읽으면 안 된다.
+#: 위반으로 읽으면 **쓸 수 있는 후보를 조용히 버린다.**
+#:
+#: `cd_3sigma` 도 표준편차의 3 배이므로 음수가 될 수 없다.
+#: `cd` 는 선폭이므로 0 보다 **커야** 한다(0 은 선이 없는 것이라 폭이 아니다).
+#: 다른 둘과 달리 하한이 '이상' 이 아니라 '초과' 여서, 검사는 `<= cd_floor` 로
+#: 한다. 104 번 참조.
+LABEL_PHYSICAL_MIN = {"nils": 0.0, "cd_3sigma": 0.0, "cd": 0.0}
+
+#: 제약 관문이 쓰는 분위수. 최솟값·최댓값은 격자 점이 늘수록 단조로 나빠지므로
+#: (13주차 Ⅶ) 격자에 따라 결론이 바뀐다. 분위수는 한 점의 잡음에 흔들리지
+#: 않는다. **최솟값 기준을 없애지 않고 둘 다 인쇄한다.** 12주차 설계와의
+#: 비교 가능성을 잃지 않기 위해서다.
+NILS_QUANTILE = 5.0      # 하한 쪽이므로 낮은 분위수
+CDU_QUANTILE = 95.0      # 상한 쪽이므로 높은 분위수
+
+#: 제약 판정 세 값. `rank` 의 정렬에서 통과 > 판정 불가 > 위반 순으로 둔다.
+#: 판정 불가를 위반과 같이 두면 13주차에 발견한 그 버림이 되살아난다.
+VERDICT_PASS, VERDICT_UNDET, VERDICT_FAIL = "통과", "판정 불가", "위반"
+VERDICT_ORDER = {VERDICT_PASS: 2, VERDICT_UNDET: 1, VERDICT_FAIL: 0}
+
+
+def constraint_verdict(nils_ok: bool, cdu_ok: bool,
+                       undetermined: bool) -> str:
+    """제약 판정 한 값. 범위 밖 예측이 섞였으면 통과도 위반도 아니다.
+
+    확정 통과는 '범위 안의 예측만으로 두 제약을 만족' 일 때만이다. 범위 밖
+    예측이 하나라도 섞이면, 만족으로 보이든 위반으로 보이든 그 판정의 근거가
+    물리가 아니므로 `판정 불가` 다.
+    """
+    if undetermined:
+        return VERDICT_UNDET
+    return VERDICT_PASS if (nils_ok and cdu_ok) else VERDICT_FAIL
+
 #: 윈도를 만들 때 쓸 격자. 초점은 학습 범위 안으로 자동 축소된다.
 N_FOCUS_DEFAULT = 33
 N_DOSE_DEFAULT = 33
@@ -110,6 +151,85 @@ REL_P95_DEFAULT = 0.0689
 # ----------------------------------------------------------------------------
 # 모형 번들
 # ----------------------------------------------------------------------------
+#: 라벨별 번들을 고를 때 모형 종류를 보는 순서. `formed_paths` 도 쓴다.
+MODEL_PREF = ("mlp", "hgb", "linear")
+
+
+def load_formed_classifier(prefix: str) -> dict | None:
+    """형성 여부 분류기를 읽는다. 없으면 None. [14 차 보완 108 번]
+
+    미형성 영역에는 **회귀 라벨이 없다.** 패턴이 안 생기면 CD 가 정의되지
+    않고 NILS 도 함께 없다. 그래서 회귀로는 끝내 덮을 수 없고, 질의가
+    거기로 가면 모형이 외삽해서 음수 NILS 를 뱉는다(103 번).
+
+    형성 여부 **자체**는 모든 점에서 정해지므로 분류로 덮인다. 1 단계에서
+    그것을 묻고, 미형성이면 품질을 따지지 않는다.
+
+    없어도 돈다. 옛 번들에는 이 파일이 없고, 그때는 **1 단계가 없다는
+    사실을 인쇄**한다. 조용히 넘어가면 덮이지 않은 영역이 덮인 것처럼
+    보인다.
+    """
+    try:
+        import joblib
+    except ImportError:
+        return None
+    for path in formed_paths(prefix):
+        if not os.path.exists(path):
+            continue
+        try:
+            b = joblib.load(path)
+        except Exception:
+            continue
+        if not isinstance(b, dict) or "model" not in b or "features" not in b:
+            continue
+        b = dict(b)
+        b["path"] = path
+        return b
+    return None
+
+
+def formed_paths(prefix: str) -> list[str]:
+    """분류기 파일을 찾아볼 경로들. [14 차 보완 110 번]
+
+    왜 한 곳만 보면 안 되는가
+    ------------------------
+    회귀 번들은 `models/s_mlp_nils.joblib` 처럼 **모형 종류**가 이름에 들어
+    가므로 `--models` 로 받는 접두사는 `models/s_mlp` 이다. 그런데 분류기는
+    회귀 종류와 무관해서 한 번만 학습하고 `{--save-model}_formed.joblib`,
+    즉 `models/s_formed.joblib` 로 저장된다. 접두사가 **한 칸 다르다.**
+
+    처음에는 `f"{prefix}_formed.joblib"` 만 보았다. 그래서 분류기를 제대로
+    저장해 두고도 추천기가 못 찾아 '1 단계 없다' 를 인쇄했다. 없는 것과
+    못 찾는 것은 전혀 다른 상태인데 화면에는 똑같이 보였다. 종류 꼬리표를
+    떼고 한 번 더 본다.
+    """
+    cands = [f"{prefix}_formed.joblib"]
+    base, sep, kind = prefix.rpartition("_")
+    if sep and base and kind in MODEL_PREF:
+        cands.append(f"{base}_formed.joblib")
+    return cands
+
+
+def predict_formed(clf: dict | None, X: np.ndarray,
+                   feat: list[str]) -> np.ndarray | None:
+    """격자 각 점의 형성 여부 예측. 분류기가 없으면 None."""
+    if clf is None:
+        return None
+    cf = list(clf.get("features") or [])
+    if not cf:
+        return None
+    try:
+        idx = [feat.index(f) for f in cf]
+    except ValueError:
+        # 학습 때와 입력 열이 다르면 **쓰지 않는다.** 열을 맞춰 끼우면
+        # 조용히 엉뚱한 값을 넣게 된다.
+        return None
+    try:
+        return np.asarray(clf["model"].predict(X[:, idx])).astype(bool)
+    except Exception:
+        return None
+
+
 def load_bundles(prefix: str, labels=LABELS_REQUIRED) -> dict:
     """`train_surrogate.py --save-model` 이 저장한 번들을 읽는다.
 
@@ -139,7 +259,8 @@ def load_bundles(prefix: str, labels=LABELS_REQUIRED) -> dict:
     #
     # mlp 를 먼저 쓰는 이유 : 출력이 매끄러워 12 주차 탐색에 맞다. hgb 는
     # 구간상수여서 같은 격자에서 계단이 생긴다(학습 보고서의 설명과 같다).
-    MODEL_PREF = ("mlp", "hgb", "linear")
+    # [110 번] 모듈 상수로 올렸다. formed_paths 도 같은 목록을 봐야 하고,
+    # 함수 안에 두면 두 곳이 조용히 어긋난다.
     out, missing, used = {}, [], {}
     for lab in labels:
         exact = f"{prefix}_{lab}.joblib"
@@ -875,8 +996,15 @@ def window_metrics(cd: np.ndarray, target_cd: float, tol: float,
 def evaluate(bundles: dict, base: dict, feat: list[str], spec: DS.SampleSpec,
              focus: np.ndarray, dose_rel: np.ndarray, rel_p95: float,
              el_target: float = EL_TARGET_DEFAULT,
-             conservative: bool = False) -> dict:
-    """후보 하나를 평가한다. 상자 밖이면 평가하지 않고 사유를 돌려준다."""
+             conservative: bool = False,
+             formed_clf: dict | None = None) -> dict:
+    """후보 하나를 평가한다. 상자 밖이면 평가하지 않고 사유를 돌려준다.
+
+    formed_clf 가 있으면 **2 단계 관문**이 된다(14 차 보완 108 번).
+    1 단계 : 패턴이 형성되는가 (분류. 공간 100 % 를 덮는다)
+    2 단계 : 품질 제약을 만족하는가 (회귀. 형성 영역만)
+    1 단계가 아니라고 하면 2 단계의 숫자는 **물리가 아니다.**
+    """
     target_cd = float(spec.duty * spec.pitch)
     dom = next(iter(bundles.values()))["domain"]
 
@@ -888,29 +1016,114 @@ def evaluate(bundles: dict, base: dict, feat: list[str], spec: DS.SampleSpec,
     m = surrogate_cd_matrix(bundles, base, feat, target_cd, focus, dose_rel,
                             X=X)
 
+    # [14 차 보완 108 번] 1 단계 : 패턴이 형성되는가.
+    # 회귀는 형성 영역만 배웠다(미형성에는 라벨이 없다). 질의가 미형성
+    # 영역으로 가면 회귀는 **조용히 외삽**한다. 그것이 103 번에서 음수
+    # NILS 로 나타났다. 여기서 먼저 묻는다.
+    fmap = predict_formed(formed_clf, X, feat)
+    if fmap is not None:
+        fmap = fmap.reshape(len(dose_rel), len(focus))
+        n_unformed_grid = int(np.count_nonzero(~fmap))
+    else:
+        n_unformed_grid = 0
+
     nom = window_metrics(m["cd"], target_cd, spec.pw_tol,
                          dose_rel, focus, el_target)
     guarded_tol = spec.pw_tol - rel_p95
     grd = window_metrics(m["cd"], target_cd, guarded_tol,
                          dose_rel, focus, el_target)
 
+    # [14 차 보완 104 번] 창을 만들기 **전에** CD 예측의 물리 범위를 센다.
+    #
+    # 왜 창 밖까지 세는가. 창 자체가 CD 예측으로 그려지기 때문이다. 모형이
+    # CD <= 0 을 예측하면 그 점은 공차 밖이라 창에서 빠지고, 창이 좁아지거나
+    # 아예 비는데 **그 원인이 어디에도 남지 않는다.** 창이 비면 아래에서
+    # nils_min 이 nan 이 되고 `isfinite` 가 False 라 '위반' 으로 적힌다.
+    # 그것은 '제약을 어겼다' 가 아니라 '잴 창이 없었다' 이고, 원인이 모형의
+    # 불가능한 예측이면 '모형이 모른다' 이다. 셋은 다른 말이다.
+    #
+    # 103 번(NILS 음수)과 같은 유형이며, 그때와 달리 **클램프가 숨기고
+    # 있었다** : `cd_3sigma / np.maximum(m["cd"], 1e-9)` 의 `np.maximum` 이
+    # 0 나눗셈 경고만 막고 사실은 지운다. 창 안에서는 CD 가 목표 근처라
+    # 이 클램프가 판정에 닿지 않지만, 그렇다고 사건이 없는 것은 아니다.
+    cd_floor = LABEL_PHYSICAL_MIN["cd"]
+    n_cd_bad_grid = int(np.count_nonzero(m["cd"] <= cd_floor))
+
     # 제약은 윈도 안쪽에서만 따진다. 윈도 밖의 값은 애초에 쓰지 않는다.
     pw = PR.process_window(m["cd"], target_cd, tol_frac=spec.pw_tol)
-    if np.count_nonzero(pw):
-        nils_min = float(np.nanmin(np.where(pw, m["nils"], np.nan)))
+    n_win = int(np.count_nonzero(pw))
+    if n_win:
+        nils_win = np.where(pw, m["nils"], np.nan)
+        cd3_win = np.where(pw, m["cd_3sigma"], np.nan)
         cdu = np.where(pw, m["cd_3sigma"] / np.maximum(m["cd"], 1e-9), np.nan)
+        nils_min = float(np.nanmin(nils_win))
         cdu_max = float(np.nanmax(cdu))
+        # [14 차 보완 103 번] 분위수 기준을 나란히 잰다. 최솟값·최댓값은
+        # 격자 점이 늘수록 단조로 나빠지므로 격자가 결론을 정한다(13주차 Ⅶ).
+        nils_q = float(np.nanpercentile(nils_win, NILS_QUANTILE))
+        cdu_q = float(np.nanpercentile(cdu, CDU_QUANTILE))
+        # 범위 밖 예측을 창 안에서만 센다.
+        n_nils_bad = int(np.count_nonzero(
+            nils_win < LABEL_PHYSICAL_MIN["nils"]))
+        n_cd3_bad = int(np.count_nonzero(
+            cd3_win < LABEL_PHYSICAL_MIN["cd_3sigma"]))
+        n_cd_bad = int(np.count_nonzero(
+            np.where(pw, m["cd"], np.inf) <= cd_floor))
+        # 창 안인데 1 단계가 '미형성' 이라고 한 점. 창은 회귀가 그린 것이고
+        # 분류기는 다른 경로이므로, 둘이 어긋나는 점이 있을 수 있다. 그
+        # 어긋남 자체가 **그 창을 믿을 수 없다는 신호**다.
+        n_unformed_win = (int(np.count_nonzero(pw & ~fmap))
+                          if fmap is not None else 0)
     else:
-        nils_min, cdu_max = float("nan"), float("nan")
+        nils_min = cdu_max = nils_q = cdu_q = float("nan")
+        n_nils_bad = n_cd3_bad = n_cd_bad = n_unformed_win = 0
+
+    n_bad = n_nils_bad + n_cd3_bad + n_cd_bad + n_unformed_win
+    # [14 차 보완 104 번] 창이 비었을 때의 판정.
+    #   - 창도 없고 불가능한 CD 예측도 있었다 -> 창을 못 믿는다. 판정 불가.
+    #   - 창은 없지만 예측은 전부 물리 범위 안이었다 -> 진짜로 창이 없다.
+    #     그것은 모형의 실패가 아니라 그 조건의 성질이므로 위반으로 둔다.
+    empty_window_unexplained = bool(n_win == 0 and n_cd_bad_grid == 0)
+    undetermined = bool(n_bad) or bool(n_win == 0 and n_cd_bad_grid > 0)
+    nils_ok = bool(np.isfinite(nils_min) and nils_min >= spec.min_nils)
+    cdu_ok = bool(np.isfinite(cdu_max) and cdu_max <= spec.stoch_tol)
+    nils_ok_q = bool(np.isfinite(nils_q) and nils_q >= spec.min_nils)
+    cdu_ok_q = bool(np.isfinite(cdu_q) and cdu_q <= spec.stoch_tol)
 
     return {
         "ok": True,
         "target_cd": target_cd,
         "nominal": nom, "guarded": grd,
         "nils_min": nils_min, "min_nils": float(spec.min_nils),
-        "nils_ok": bool(np.isfinite(nils_min) and nils_min >= spec.min_nils),
+        "nils_ok": nils_ok,
         "cdu_max": cdu_max, "stoch_tol": float(spec.stoch_tol),
-        "cdu_ok": bool(np.isfinite(cdu_max) and cdu_max <= spec.stoch_tol),
+        "cdu_ok": cdu_ok,
+        # --- [14 차 보완 103 번] 물리 범위와 분위수 ----------------------
+        # `verdict` 가 관문의 답이다. `nils_ok and cdu_ok` 를 직접 쓰면
+        # 판정 불가가 위반으로 섞여 든다(13주차에 실제로 그랬다).
+        "verdict": constraint_verdict(nils_ok, cdu_ok, undetermined),
+        "undetermined_constraint": undetermined,
+        "n_window": n_win,
+        "n_out_of_range": n_bad,
+        "n_nils_below_zero": n_nils_bad,
+        "n_cd3_below_zero": n_cd3_bad,
+        # [14 차 보완 104 번] CD 는 창을 만드는 값이라 격자 전체에서도 센다.
+        "n_cd_below_zero": n_cd_bad,
+        "n_cd_below_zero_grid": n_cd_bad_grid,
+        # [108 번] 1 단계 결과. 분류기가 없으면 전부 0 이고, 그 사실을
+        # `formed_stage` 로 구분한다. 0 건인 것과 **묻지 않은 것**은 다르다.
+        "formed_stage": bool(fmap is not None),
+        "n_unformed_window": n_unformed_win,
+        "n_unformed_grid": n_unformed_grid,
+        "n_grid": int(m["cd"].size),
+        "empty_window": bool(n_win == 0),
+        "empty_window_unexplained": empty_window_unexplained,
+        "frac_out_of_range": (float(n_bad) / float(n_win)) if n_win else 0.0,
+        "nils_q": nils_q, "nils_quantile": float(NILS_QUANTILE),
+        "nils_ok_q": nils_ok_q,
+        "cdu_q": cdu_q, "cdu_quantile": float(CDU_QUANTILE),
+        "cdu_ok_q": cdu_ok_q,
+        "verdict_q": constraint_verdict(nils_ok_q, cdu_ok_q, undetermined),
         "certifiable": bool(guarded_tol > 0),
     }
 
@@ -921,7 +1134,8 @@ def evaluate(bundles: dict, base: dict, feat: list[str], spec: DS.SampleSpec,
 def rank(bundles: dict, feat: list[str], tool: dict, pitch: float,
          duty: float, rel_p95: float, n_na: int, n_sig: int,
          focus_span: float, n_focus: int, dose_span: float, n_dose: int,
-         el_target: float, conservative: bool) -> dict:
+         el_target: float, conservative: bool,
+         formed_clf: dict | None = None) -> dict:
     """(na, sigma_out) 격자를 전수 평가하고 순위를 매긴다."""
     dom = next(iter(bundles.values()))["domain"]
     ax = dom["axes"]
@@ -1043,7 +1257,8 @@ def rank(bundles: dict, feat: list[str], tool: dict, pitch: float,
             spec = DS.SampleSpec(pitch=pitch, duty=duty, na=float(na),
                                  sigma_out=float(sg))
             r = evaluate(bundles, base, feat, spec, focus, dose_rel,
-                         rel_p95, el_target, conservative)
+                         rel_p95, el_target, conservative,
+                         formed_clf=formed_clf)
             if not r["ok"]:
                 skipped += 1
                 continue
@@ -1082,7 +1297,10 @@ def rank(bundles: dict, feat: list[str], tool: dict, pitch: float,
     # 구간 [0.0, 281.2], 참값 112.7). 따로 모아 보고한다.
     undet = [r for r in rows if r["nominal"]["undetermined"]]
     undet.sort(key=lambda r: r["nominal"]["dof_upper"], reverse=True)
-    rows.sort(key=lambda r: (r["nils_ok"] and r["cdu_ok"],
+    # [14 차 보완 103 번] 정렬 키는 세 값 판정이다. 통과 > 판정 불가 >
+    # 위반. 판정 불가를 위반과 같이 두면 모형이 모르는 영역의 후보가
+    # 조용히 맨 뒤로 밀린다.
+    rows.sort(key=lambda r: (VERDICT_ORDER[r["verdict"]],
                              r["nominal"]["dof"], r["nominal"]["total"]),
               reverse=True)
     if mirrored:
@@ -1256,6 +1474,9 @@ def main() -> int:
     print("=" * 78)
 
     bundles = load_bundles(args.models)
+    # [14 차 보완 108 번] 1 단계 분류기. 없으면 None 이고, 그 사실을 아래에서
+    # 인쇄한다. 조용히 넘어가면 덮이지 않은 영역이 덮인 것처럼 보인다.
+    formed_clf = load_formed_classifier(args.models)
 
     rel_p95, rel_src, _ms = resolve_rel_p95(bundles, args.rel_p95)
 
@@ -1345,7 +1566,8 @@ def main() -> int:
         t = dict(tool); t.update(arm)
         r = rank(bundles, feat, t, args.pitch, args.duty, rel_p95,
                  args.n_na, args.n_sigma, args.focus_span, args.n_focus,
-                 args.dose_span, args.n_dose, args.el, args.conservative)
+                 args.dose_span, args.n_dose, args.el, args.conservative,
+                 formed_clf=formed_clf)
         lab = arm_label(arm) if len(arms) > 1 else ""
         for row in r["rows"]:
             row["arm"] = lab
@@ -1358,7 +1580,10 @@ def main() -> int:
                 notes_all.append(nt)
         res = r
     # 조합을 섞어 다시 정렬한다. 정렬 키는 rank 와 같아야 한다.
-    rows.sort(key=lambda r: (r["nils_ok"] and r["cdu_ok"],
+    # [14 차 보완 103 번] 정렬 키는 세 값 판정이다. 통과 > 판정 불가 >
+    # 위반. 판정 불가를 위반과 같이 두면 모형이 모르는 영역의 후보가
+    # 조용히 맨 뒤로 밀린다.
+    rows.sort(key=lambda r: (VERDICT_ORDER[r["verdict"]],
                              r["nominal"]["dof"], r["nominal"]["total"]),
               reverse=True)
     undet_all.sort(key=lambda r: r["nominal"]["dof_upper"], reverse=True)
@@ -1392,7 +1617,8 @@ def main() -> int:
           + ("   이산 조합" if _multi else ""))
     print("  " + "-" * (84 if _multi else 72))
     for r in rows[:args.top]:
-        ok = "통과" if (r["nils_ok"] and r["cdu_ok"]) else "제약 위반"
+        ok = {VERDICT_PASS: "통과", VERDICT_UNDET: "판정 불가",
+              VERDICT_FAIL: "제약 위반"}[r["verdict"]]
         # 보고된 숫자가 잘렸는지를 1차로 적는다. 창 전체가 격자보다 큰 것은
         # 뜻이 달라 표 아래에 따로 적는다(13주차).
         flag = ""
@@ -1415,6 +1641,35 @@ def main() -> int:
                   f"적합예측 {100 * float(_cf['guarantee']):.0f} % 구간 "
                   f"[{lo:.1f}, {r['nominal']['dof'] + q:.1f}] nm "
                   f"(+-{q:.1f})")
+
+    # [108 번] 1 단계 관문이 있는지부터 적는다. 있고 없고가 **덮는 범위**를
+    # 바꾸므로, 없으면 없다고 분명히 말해야 한다.
+    if formed_clf is not None:
+        _fr = float(formed_clf.get("formed_rate", float("nan")))
+        print(f"\n  [1 단계 형성 분류기] 있음. 학습 점 "
+              f"{formed_clf.get('n_points', 0):,} "
+              f"(형성 {100 * _fr:.1f} % · 미형성 {100 * (1 - _fr):.1f} %), "
+              f"AUC {formed_clf.get('auc', float('nan')):.4f}")
+        # [114 번] 이 비율은 **번들에 기록된 실측**이다. 상수로 적어 두면
+        # 데이터셋이 바뀌는 날 조용히 낡는다(54·109 번과 같은 유형).
+        _nu = sum(r.get("n_unformed_window", 0) for r in rows)
+        if _nu:
+            print(f"    창 안에서 '미형성' 으로 본 점 {_nu:,}. 그 후보는")
+            print("    판정 불가다. 회귀가 그린 창과 분류가 어긋났다는 뜻이고,")
+            print("    어긋남 자체가 그 창을 믿을 수 없다는 신호다.")
+    else:
+        # [110 번] 어디를 찾아봤는지 적는다. '없다' 와 '못 찾았다' 는 전혀
+        # 다른 상태인데, 경로를 안 적으면 화면에 똑같이 보인다.
+        print("\n  [1 단계 형성 분류기] **없다.** 찾아본 곳 : "
+              + ", ".join(formed_paths(args.models)))
+        # [114 번] 여기서 미형성 비율을 **말하지 않는다.** 분류기가 없으면
+        # 그 비율을 잴 근거도 없다. 예전에는 67.6 % 를 박아 두었는데, 그
+        # 값은 옛 데이터셋에서 한 번 잰 것이고 데이터셋마다 달라진다
+        # (이번 실측은 47.4 %). 모르면 모른다고 적는다.
+        print("    미형성 영역에는 회귀 라벨이 없으므로, 질의가 거기로")
+        print("    가면 모형이 외삽한다. 그것이 103 번의 음수 NILS 였다.")
+        print("    그 영역이 얼마나 넓은지는 분류기가 있어야 잴 수 있다.")
+        print("    `--keep-formed` 로 생성한 데이터셋으로 학습하면 생긴다.")
 
     # 외삽 거리. 상자 검사는 필요조건일 뿐이고 10 차원에서 매우 약하다.
     # 추천기는 NA·sigma 의 **최댓값**을 고르므로 질의점이 바로 그 약한
@@ -1540,7 +1795,8 @@ def main() -> int:
             nm_ = r["nominal"]
             d_lo, d_hi = nm_["dose_range"]
             z_lo, z_hi = nm_["focus_range"]
-            ok_ = "통과" if (r["nils_ok"] and r["cdu_ok"]) else "제약 위반"
+            ok_ = {VERDICT_PASS: "통과", VERDICT_UNDET: "판정 불가",
+                   VERDICT_FAIL: "제약 위반"}[r["verdict"]]
             fl_ = ""
             if nm_["row_focus_edge"]:
                 fl_ += " [초점 잘림]"
@@ -1585,10 +1841,24 @@ def main() -> int:
             print("     CD 역추정으로 얻은 값이면 오프셋을 ± 로 읽고, 부호는")
             print("     초점 스윕 실험으로 따로 정할 것. 창 밖으로 나가지는")
             print("     않지만 한쪽 여유의 절반 가까이를 잃는다.")
-        if any(not (r["nils_ok"] and r["cdu_ok"]) for r in _best):
+        if any(r["verdict"] == VERDICT_FAIL for r in _best):
             print("\n  '제약 위반' 행의 운전점은 **쓰면 안 된다.** 창은 있지만")
             print("  NILS 또는 CDU 가 공차를 넘는다. 창 폭만 보고 고르면")
             print("  놓치는 조건이므로 함께 적는다.")
+        _und = [r for r in _best if r["verdict"] == VERDICT_UNDET]
+        if _und:
+            _wf = max(r["frac_out_of_range"] for r in _und)
+            print("\n  '판정 불가' 행은 통과도 위반도 아니다. 예측에")
+            print("  **물리적으로 불가능한 값**(NILS < 0, CD3sigma < 0, CD <= 0)이")
+            print(f"  섞여 있다. 최악 행에서 창 점의 {100 * _wf:.1f} % 가 그렇다.")
+            _cdg = sum(r.get("n_cd_below_zero_grid", 0) for r in _und)
+            if _cdg:
+                print(f"  그 가운데 CD <= 0 예측이 격자 전체에서 {_cdg} 점이다.")
+                print("  CD 는 창을 그리는 값이므로, 이 경우 창 경계 자체를")
+                print("  믿을 수 없다(14 차 보완 104 번).")
+            print("  그 값으로 내린 합격·불합격은 물리의 판단이 아니므로")
+            print("  **위반으로 읽어 버리면 쓸 수 있는 후보를 잃는다.**")
+            print("  이 후보들은 시뮬레이터로 직접 재야 한다(13주차 Ⅶ).")
         if any(r["nominal"]["row_focus_edge"] or r["nominal"]["row_dose_edge"]
                for r in _best):
             print("\n  '잘림' 행의 허용 범위와 창 폭은 **스윕 경계에서 잘린**")
