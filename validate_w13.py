@@ -2636,35 +2636,56 @@ for _nm35 in ("SRC_CHOICES", "POL_CHOICES", "MSK_CHOICES"):
 # ---------------------------------------------------------------------------
 head(36, "레일을 접었다가 다시 펼 수 있는가")
 
-# 왜 이 사례가 필요한가 : 14 주차에 **쓰는 사람이 실제로 막혔다.** 디자인을
-# 맞추려고 Streamlit 기본 머리띠 높이를 0 으로 눌렀는데, 레일을 다시 펴는
-# 화살표가 그 머리띠 안에 들어 있었다. 한 번 접으면 새로 고치는 것 말고는
-# 되돌릴 길이 없었다.
+# 왜 이 사례가 필요한가 : 14 주차에 **쓰는 사람이 실제로 갇혔다.** 레일을 한
+# 번 접으니 다시 펴는 화살표가 없었다.
 #
-# 첫 수정은 화살표만 골라 꺼내려고 `data-testid` 이름을 적는 것이었는데,
-# **그래도 안 나왔다.** 판마다 이름이 다르기 때문이다. 이름을 맞히는 방식은
-# 맞았는지 확인할 길이 없으면 고쳤다고 말할 수 없다. 그래서 **가리지 않는
-# 쪽**으로 바꿨다. 이 검사가 지키는 것은 그 결정이다.
+# 두 번 고쳤는데 두 번 다 빗나갔다.
+#   1차 : 머리띠 높이를 0 으로 눌러 두었다 -> 화살표가 잘려 나갔다.
+#   2차 : 화살표만 골라 꺼내려고 `data-testid` 이름을 적었다 -> 판마다
+#         이름이 달라 안 먹었다 (배포본은 Streamlit 1.67).
+# 둘의 공통점은 **띄워 보지 못한 채 고쳤다**는 것이다. 못 보는 동안에는
+# 'Streamlit 속이 이러이러할 것이다' 에 기대는 수정을 하면 안 된다.
+#
+# 3차는 기대지 않는다. 머리띠 영역은 아무것도 숨기지 않고, 탈출구는 CSS 가
+# 아니라 `initial_sidebar_state="expanded"` 로 둔다. 그 값이면 새로 고침이
+# 반드시 레일을 되돌린다. 이 검사가 지키는 것은 그 두 가지다.
+import ast as _ast36
 import ui as UI36
 
 _css36 = UI36.css()
-_hdr36 = _css36[_css36.index('header[data-testid="stHeader"]'):][:200]
-chk("height: 0" not in _hdr36,
-    "머리띠 높이를 0 으로 누르지 않는다",
-    "눌러 두면 그 안의 펼침 화살표가 잘려 나간다")
-chk("background: transparent" in _hdr36,
-    "머리띠는 투명하게만 두어 자리를 남긴다")
-chk("overflow: visible" in _hdr36,
-    "머리띠가 제 안의 것을 잘라 내지 않는다")
-chk('[data-testid="stToolbar"]' in _css36 and "display: none" in _css36,
-    "지울 것은 머리띠가 아니라 '배포' 단추 쪽이다")
-# 이름을 맞히는 규칙은 덤으로 남겨 두되, **그것에 기대지 않는다**는 것이
-# 위 세 검사의 뜻이다.
-chk('[data-testid="stSidebarCollapsedControl"]' in _css36,
-    "이름이 맞는 판에서는 화살표를 더 잘 보이게 한다 (덤)")
-chk("position: fixed" not in _css36[_css36.index("덤이다"):][:400],
-    "덤 규칙이 화살표를 제자리에서 옮기지 않는다",
-    "머리띠가 살아 있으므로 옮기면 두 군데에 보이거나 겹친다")
+_app36 = open("app.py", encoding="utf-8").read()
+
+# (가) 머리띠 영역에서 **아무것도 숨기지 않는다.**
+for _sel36 in ('[data-testid="stToolbar"]', '[data-testid="stDecoration"]',
+               "#MainMenu"):
+    chk(_sel36 not in _css36,
+        f"{_sel36} 를 숨기지 않는다",
+        "화살표가 이 영역 안에 있을 수 있다. 1.67 에서 실제로 그랬다")
+_hdr36 = _css36[_css36.index('header[data-testid="stHeader"]'):][:120]
+chk("height: 0" not in _hdr36 and "display: none" not in _hdr36,
+    "머리띠를 눌러 두거나 지우지 않는다")
+
+# (나) 이름을 맞히는 규칙에 **기대지 않는다.** 2 차가 그래서 빗나갔다.
+chk("CollapsedControl" not in _css36 and "collapsedControl" not in _css36,
+    "Streamlit 내부 이름에 기대지 않는다",
+    "판마다 달라서 맞았는지 확인할 길이 없다")
+
+# (다) 탈출구는 CSS 바깥에 둔다.
+# 글자로 찾으면 **설명하는 주석에 속는다.** 실제로 한 번 속았다 : 설정을
+# 지웠는데도 바로 위 주석에 같은 글자가 있어 검사가 통과했다. 호출을 본다.
+_cfg36 = [
+    n for n in _ast36.walk(_ast36.parse(_app36))
+    if isinstance(n, _ast36.Call) and isinstance(n.func, _ast36.Attribute)
+    and n.func.attr == "set_page_config"
+]
+chk(len(_cfg36) == 1, "set_page_config 는 한 번만 부른다", f"{len(_cfg36)} 번")
+_kw36 = {k.arg: k.value for c in _cfg36 for k in c.keywords}
+chk(isinstance(_kw36.get("initial_sidebar_state"), _ast36.Constant)
+    and _kw36["initial_sidebar_state"].value == "expanded",
+    "새로 고치면 레일이 반드시 돌아온다",
+    '기본값 "auto" 는 접은 상태를 브라우저에 기억해 둔다')
+chk(_cfg36[0].lineno < _app36[:_app36.index("UI.css()")].count("\n") + 1,
+    "그 설정은 CSS 보다 먼저 정해진다 (set_page_config 는 첫 호출이어야 한다)")
 
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스

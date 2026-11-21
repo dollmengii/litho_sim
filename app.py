@@ -75,7 +75,12 @@ _set_korean_font()
 # 고칠 때 조용히 덮이지 않는다.
 UI.mpl_dark()
 
-st.set_page_config(page_title="포토리소그래피 공정 시뮬레이터", layout="wide")
+# [14 주차] `initial_sidebar_state="expanded"` 를 못 박는다. 기본값 "auto" 는
+# 접은 상태를 그 브라우저에 기억해 두어, 한 번 접으면 새로 고쳐도 접힌 채로
+# 뜬다. 쓰는 사람이 실제로 여기에 갇혔다. 이 값이면 새로 고침이 **확실한
+# 탈출구**가 된다.
+st.set_page_config(page_title="포토리소그래피 공정 시뮬레이터", layout="wide",
+                   initial_sidebar_state="expanded")
 st.markdown(UI.css(), unsafe_allow_html=True)
 # [14 주차] `st.title` 대신 우리 마크업으로 그린다. 제목 위의 작은 대문자
 # 머리표가 디자인의 핵심인데 Streamlit 에는 그 자리가 없다.

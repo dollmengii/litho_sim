@@ -232,32 +232,18 @@ hr {{ border-color: var(--line); margin: 1.1rem 0; }}
 
 /* Streamlit 의 기본 머리띠와 '배포' 단추를 지운다. 화면 맨 위가 우리
    머리표로 시작해야 레이아웃이 디자인과 같아진다 */
-/* 머리띠는 **지우지 않는다.** 레일을 접으면 다시 펴는 화살표가 그 안에
-   들어 있어서, 높이를 0 으로 누르면 화살표까지 잘려 나간다. 한 번 접으면
-   새로 고치는 것 말고는 되돌릴 길이 없었다.
-   처음에는 화살표만 골라 꺼내려고 `data-testid` 이름을 적었는데, 판마다
-   이름이 달라 그 방법으로는 안 먹었다. **이름을 맞히는 대신 가리지 않는
-   쪽으로** 바꾼다. 배경만 투명하게 하고 자리는 남겨 둔다 */
-header[data-testid="stHeader"] {{
-  background: transparent; overflow: visible;
-}}
-[data-testid="stToolbar"] {{ display: none; }}
-[data-testid="stDecoration"] {{ display: none; }}
-#MainMenu, footer {{ visibility: hidden; }}
+/* 머리띠 영역은 **아무것도 숨기지 않는다.**
 
-/* 아래 규칙은 덤이다. 이름이 맞는 판에서는 화살표를 더 잘 보이게 한다.
-   맞지 않아도 위에서 이미 가리지 않으므로 화살표는 남는다 */
-[data-testid="stSidebarCollapsedControl"],
-[data-testid="collapsedControl"] {{
-  display: flex !important; visibility: visible !important; z-index: 1000;
-}}
-[data-testid="stSidebarCollapsedControl"] button,
-[data-testid="collapsedControl"] button {{
-  background: {SURF}; border: 1px solid {LINE}; border-radius: 8px;
-  color: {TXT}; box-shadow: 0 1px 3px rgba(21,19,26,.08);
-}}
-[data-testid="stSidebarCollapsedControl"] svg,
-[data-testid="collapsedControl"] svg {{ fill: {TXT}; color: {TXT}; }}
+   레일을 접으면 다시 펴는 화살표가 이 영역 안에 있다. 14 주차에 두 번
+   빗나갔다 : 처음에는 높이를 0 으로 눌러 잘라 냈고, 두 번째는 화살표만
+   골라 꺼내려고 `data-testid` 이름을 적었는데 판마다 이름이 달라 안 먹었다
+   (배포본은 Streamlit 1.67). 두 번 다 **내가 띄워 보지 못한 채 고친** 것이
+   원인이다. 그래서 숨기기를 그만둔다. 'Deploy' 단추가 구석에 보이는 것은
+   감수한다. 한 번 접으면 못 펴는 것보다 낫다.
+
+   탈출구는 CSS 가 아니라 `app.py` 의 `initial_sidebar_state="expanded"` 다.
+   그 값이면 새로 고침이 반드시 레일을 되돌린다 */
+header[data-testid="stHeader"] {{ background: transparent; }}
 
 /* 사이드바를 '레일' 로. 브랜드 마크가 맨 위에 앉는다 */
 section[data-testid="stSidebar"] > div {{ padding-top: 1.6rem; }}
