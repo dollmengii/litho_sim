@@ -2687,6 +2687,111 @@ chk(isinstance(_kw36.get("initial_sidebar_state"), _ast36.Constant)
 chk(_cfg36[0].lineno < _app36[:_app36.index("UI.css()")].count("\n") + 1,
     "그 설정은 CSS 보다 먼저 정해진다 (set_page_config 는 첫 호출이어야 한다)")
 
+
+# ---------------------------------------------------------------------------
+head(37, "펼침 상자를 겹치지 않는가 · 조건 위젯이 화면을 옮겨도 값을 지키는가")
+
+# (가) 왜 필요한가 : 14 주차에 화면의 긴 설명문을 손보다가 **상자가 뒤따르던
+# 코드까지 삼켜** 이미 있던 펼침 상자 위에 상자가 얹혔다. Streamlit 은 펼침
+# 상자를 겹치면 실행 중에 예외를 던진다. 즉 화면이 죽는다. 문법 검사로는 안
+# 잡히고 앱을 띄워야만 드러나는데, 이 환경에서는 앱을 못 띄운다. 구조로 잡는다.
+import ast as _ast37
+
+_src37 = open("app.py", encoding="utf-8").read()
+_app37 = _ast37.parse(_src37)
+
+
+def _is_exp37(n) -> bool:
+    """펼침 상자를 만드는 자리. `with` 꼴과 대입 꼴 둘 다다.
+
+    `sb = st.expander(...)` 로 받아 두고 `sb.container()` 로 쓰는 꼴도
+    똑같이 상자를 만든다. `with` 만 보면 그 꼴을 놓친다 -- 음성 대조를
+    그렇게 심었다가 검사가 통과해서 알았다.
+    """
+    if isinstance(n, _ast37.With):
+        return any("expander" in _ast37.unparse(i.context_expr)
+                   for i in n.items)
+    if isinstance(n, (_ast37.Assign, _ast37.AnnAssign)):
+        v = getattr(n, "value", None)
+        return (isinstance(v, _ast37.Call)
+                and getattr(v.func, "attr", "") == "expander")
+    return False
+
+
+_par37 = {}
+for _n in _ast37.walk(_app37):
+    for _c in _ast37.iter_child_nodes(_n):
+        _par37[_c] = _n
+
+_nest37 = []
+for _n in _ast37.walk(_app37):
+    if not _is_exp37(_n):
+        continue
+    _cur = _n
+    while _cur in _par37:
+        _cur = _par37[_cur]
+        if _is_exp37(_cur):
+            _nest37.append((_n.lineno, _cur.lineno))
+            break
+chk(not _nest37, "펼침 상자를 겹쳐 놓지 않는다",
+    f"app.py 겹침 {_nest37[:3]} — Streamlit 이 예외를 던진다")
+chk(_src37.count("st.expander(") >= 2,
+    "펼침 상자를 실제로 쓰고 있다 (위 검사가 공집합이 아니다)",
+    f"{_src37.count('st.expander(')} 개")
+
+# (나) 이 검사는 아직 틀린 적이 없다. 막으려는 것 : 화면마다 `disabled` 와
+# `help` 가 달라지는 위젯은, 고정 키가 없으면 Streamlit 이 매개변수로
+# 알아보므로 **화면을 옮길 때 값이 처음으로 돌아갈 수** 있다. 조건 슬라이더가
+# 그러면 사용자가 맞춰 둔 조건이 말없이 사라진다.
+_varying37 = []
+for _n in _ast37.walk(_app37):
+    if not (isinstance(_n, _ast37.Call)
+            and getattr(_n.func, "attr", "") == "slider"):
+        continue
+    _kw = {k.arg for k in _n.keywords}
+    if ({"disabled", "help"} & _kw) and "key" not in _kw:
+        _varying37.append(_n.lineno)
+chk(not _varying37, "화면마다 모습이 바뀌는 슬라이더에는 고정 키가 있다",
+    f"app.py {_varying37[:3]} 줄 — 화면을 옮기면 값이 돌아갈 수 있다")
+
+# 조건 슬라이더 넷은 모두 키를 가진다. 값이 사라지면 가장 아픈 자리다.
+for _k37 in ("k_na", "k_sigma_out", "k_pitch", "k_duty"):
+    chk(f'key="{_k37}"' in _src37, f"{_k37} 키가 박혀 있다")
+
+
+# ---------------------------------------------------------------------------
+head(38, "화면 코드가 이름을 정하기 전에 쓰지 않는가")
+
+# 왜 이 사례가 필요한가 : 14 주차에 설명문을 값(칩)으로 바꾸다가 `drop` 을
+# **정의보다 먼저** 쓰는 코드를 만들었다. 문법은 맞아서 컴파일은 되고,
+# 그 화면을 열 때만 NameError 로 죽는다. 앱을 못 띄우는 이 환경에서는
+# 끝까지 안 보였을 것이다.
+#
+# 같은 날 `validate_w8` 이 또 하나를 잡았다. 사족을 지우면서 'y 측정 길이'
+# 까지 지웠는데 그것은 설명이 아니라 **측정 조건**이었다. 둘 다 "화면에서
+# 글을 치우는 일"이 조용히 다른 것을 건드린 경우다.
+import order_check as OC38
+
+_bad38 = OC38.check("app.py")
+chk(not _bad38, "app.py 에서 정의 전에 쓰는 이름이 없다",
+    f"{_bad38[:3]}")
+
+# 검출력 : 검사기가 실제로 이름을 훑고 있어야 한다. 빈 자루이면 늘 통과한다.
+import ast as _ast38
+_known38 = len({n.id for n in _ast38.walk(_ast38.parse(
+    open("app.py", encoding="utf-8").read()))
+    if isinstance(n, _ast38.Name)})
+chk(_known38 >= 200, "검사기가 훑는 이름이 비어 있지 않다", f"{_known38} 개")
+
+# 측정 조건은 화면에서 사라지면 안 된다 (w8 이 잡은 그 줄).
+_app38 = open("app.py", encoding="utf-8").read()
+chk("y_length_nm" in _app38,
+    "y 측정 길이를 화면에 띄운다",
+    "LER 은 y 측정 길이에 수렴하므로 길이 없이는 값의 뜻이 없다")
+chk("k2_used" in _app38 and "k3_used" in _app38,
+    "두 DOF 의 계수를 화면에 띄운다",
+    "DOF 가 두 개 떠 있는데 왜 다른지 알 길이 없어진다")
+
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
 # 합계를 낸다. 이 줄의 형식을 바꾸면 합계에 **0 으로** 들어가고, 문서에 적힌
@@ -2704,12 +2809,13 @@ print("""
    해석      Case 3, 5, 8, 9, 10, 12, 14, 15, 16, 18 — 측정 자체가 뜻을
              갖는 조건.
              음성 대조가 있다.
-   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36 — 코드가 지켜야 하는 관계.
+   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38 — 코드가 지켜야 하는 관계.
              Case 24 는 모형 파일 없이 번들을 손으로 만들어 관문을 잰다.\n             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
              꼴과의 **정확** 대조다(시뮬레이션이 아니다).
-   -> 36 개 가운데 35 개는 **실제로 한 번 틀렸던 것**이다. 35 번만은
-      아직 틀린 적이 없고, 110 번과 **같은 종류의 이음매**(앱과 추천기가
-      같은 이름을 서로 다르게 적는 것)를 막으려고 넣었다. 추측으로 넣은
+   -> 38 개 가운데 36 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
+      틀린 적이 없다. 35 번은 110 번과 **같은 종류의 이음매**(앱과 추천기가
+      같은 이름을 서로 다르게 적는 것)를, 37 번 (나) 는 화면을 옮길 때 조건이
+      말없이 사라지는 것을 막으려고 넣었다. 추측으로 넣은
       항목은 없다. 물리 모델의 정당성은 여기서 다루지 않는다 (validate.py,
       validate_w12.py, claims.py).""")
 print("=" * 78)

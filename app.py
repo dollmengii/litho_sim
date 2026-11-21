@@ -248,15 +248,19 @@ _help = ("이 화면은 NA·σ 를 쓰지 않습니다. '공간 광강도' 부�
 
 _kc = st.columns(4)
 with _kc[0]:
+    # [14 주차] 고정 키. 화면마다 disabled·help 가 달라지는데, 키가 없으면
+    # Streamlit 이 매개변수로 위젯을 알아보므로 화면을 옮길 때 값이 처음으로
+    # 돌아갈 수 있다. 키를 박으면 같은 위젯임이 분명해진다.
     na = st.slider("개구수 NA", 0.10, 1.60, 1.35, 0.01,
-                   disabled=_idle, help=_help)
+                   key="k_na", disabled=_idle, help=_help)
 with _kc[1]:
     sigma_out = st.slider("조명 σ_out", 0.0, 1.0, 0.70, 0.01,
-                          disabled=_idle, help=_help)
+                          key="k_sigma_out", disabled=_idle, help=_help)
 with _kc[2]:
-    pitch = st.slider("Pitch [nm]", 20.0, 1000.0, 160.0, 1.0)
+    pitch = st.slider("Pitch [nm]", 20.0, 1000.0, 160.0, 1.0, key="k_pitch")
 with _kc[3]:
-    duty = st.slider("Duty Cycle (CD / Pitch)", 0.10, 0.90, 0.50, 0.01)
+    duty = st.slider("Duty Cycle (CD / Pitch)", 0.10, 0.90, 0.50, 0.01,
+                     key="k_duty")
 
 sb = st.expander("전체 조건 펼치기", expanded=False)
 
@@ -503,15 +507,15 @@ if rayleigh.get("dof_ratio"):
             "`litho/` 폴더까지 함께 올리십시오."
         )
     else:
+        # [14 주차] 설명문은 걷어냈지만 **계수 자체는 값이라 남긴다.** 화면에
+        # DOF 가 두 개 떠 있는데 왜 다른지 알 길이 없으면 둘 중 무엇을 믿을지
+        # 알 수 없다. 글 대신 값으로만 적는다.
         _over = (1.0 / rayleigh["dof_ratio"] - 1.0) * 100.0
-        st.caption(
-            f"두 DOF 는 같은 광로차 기준을 서로 다르게 정규화한 것이므로 계수가 "
-            f"다르다 (k2 = {rayleigh['k2_used']:.3f}, k3 = k2/2 = "
-            f"{rayleigh['k3_used']:.3f}). 고NA 식이 그 기준을 근사 없이 푼 값이고, "
-            f"근축 식은 이 조건에서 {_over:+.1f}% 과대평가한다. 둘 다 Rayleigh "
-            f"꼴의 축척 관계이므로 실제 초점 여유는 CD 허용오차와 EL 기준에 따라 "
-            f"달라진다. '공정 윈도' 탭의 측정 DOF 와 함께 읽을 것."
-        )
+        st.markdown(UI.chips([
+            ("k2", f"{rayleigh['k2_used']:.3f}", ""),
+            ("k3 = k2/2", f"{rayleigh['k3_used']:.3f}", ""),
+            ("근축 식 과대", f"{_over:+.1f}", "%"),
+        ]), unsafe_allow_html=True)
 
 # [14 주차] 탭 막대 대신 왼쪽 메뉴가 화면을 고른다. 고른 화면 하나만
 # 그리므로 나머지 화면의 연산도 돌지 않는다(그만큼 빨라진다).
@@ -561,20 +565,20 @@ if nav == "공간 광강도":
     ), unsafe_allow_html=True)
 
     c = IM.contrast(intensity, sim_grid.x)
-    st.markdown(UI.chips([
-        ("Contrast", f"{c:.4f}", ""),
+    _chips = [("Contrast", f"{c:.4f}", "")]
+    if defocus != 0.0:
+        # 초점이 0 일 때는 자기 자신과 견주는 꼴이라 뜻이 없다. 그때는 칩을
+        # 아예 내지 않는다. (계산을 칩보다 **먼저** 둔다 -- 뒤에 두었다가
+        # 정의 전에 쓰는 꼴이 되어 이 화면이 죽을 뻔했다.)
+        c0 = IM.contrast(i_focus, sim_grid.x)
+        drop = (1 - c / c0) * 100 if c0 > 0 else 0.0
+        _chips.append(("Δz=0 대비", f"{drop:+.1f}", "%"))
+    _chips += [
         ("NILS", f"{cd_result['nils']:.2f}", ""),
         ("I_max", f"{i_max:.3f}", ""),
         ("I_min", f"{i_min:.3f}", ""),
-    ]), unsafe_allow_html=True)
-    if defocus != 0.0:
-        c0 = IM.contrast(i_focus, sim_grid.x)
-        drop = (1 - c / c0) * 100 if c0 > 0 else 0.0
-        st.caption(
-            f"Δz = 0 대비 contrast {c0:.4f} → {c:.4f} ({drop:+.1f}% 변화). "
-            f"고NA DOF 추정값 {rayleigh['dof_high_na']:.0f} nm 와 비교하세요."
-            if rayleigh["dof_high_na"] else ""
-        )
+    ]
+    st.markdown(UI.chips(_chips), unsafe_allow_html=True)
 
 if nav == "현상 후 패턴":
     profile = RS.resist_profile(intensity_dosed, threshold, tone)
@@ -601,11 +605,6 @@ if nav == "현상 후 패턴":
         )
 
 if nav == "공정 윈도":
-    st.caption(
-        "Dose 는 정규화 광강도에 곱하는 스칼라이므로 결상 연산은 Defocus 에만 의존합니다. "
-        f"{n_dose} x {n_focus} 격자를 {n_focus} 회 연산으로 처리합니다 "
-        f"({100 * (1 - n_focus / (n_dose * n_focus)):.1f}% 절감)."
-    )
     if st.button("Dose-Focus 스윕 실행", type="primary"):
         st.session_state["sweep_done"] = True
 
@@ -645,13 +644,6 @@ if nav == "공정 윈도":
                  f"통과율 {100 * _n_pass / res['pw'].size:.1f} %"),
             ]), unsafe_allow_html=True)
 
-            st.caption(
-                f"DOF 는 격자화 때문에 항상 작게 나오므로 구간 "
-                f"[{d5:.0f}, {d5_up:.0f}] nm 로 읽습니다. 구간은 초점 격자와 "
-                f"노광 격자 **양쪽**의 편향을 담습니다. 격자를 촘촘히 하면 "
-                f"구간이 좁아집니다. 역산 k2 는 하한에서 나온 값이라 역시 "
-                f"하한입니다."
-            )
             if d5 <= 0.0 < d5_up:
                 st.warning(
                     f"**격자가 판정하지 못했습니다.** 하한 0, 상한 "
@@ -704,11 +696,6 @@ if nav == "공정 윈도":
                 fige.tight_layout()
                 st.pyplot(fige, clear_figure=True)
 
-            st.info(
-                f"측정 DOF {d5:.0f} nm 로부터 역산한 k2 = {k2m:.3f} 입니다. "
-                f"해석식 기준값(입력 k2 = {k2:.3f})과의 차이는 Rayleigh 상수가 "
-                "조명 조건 및 k1 에 의존하기 때문입니다."
-            )
 
             # --- 내려받기 -------------------------------------------------
             # 화면에 **보이는 문자열 그대로** 넘긴다. 여기서 다시 반올림하면
@@ -776,11 +763,6 @@ if nav == "공정 윈도":
 # 났던 사고다. 화면은 인자를 모아 주고 결과를 읽기 좋게 놓을 뿐이다.
 if nav == "조건 추천":
     st.markdown(UI.section("조건 추천"), unsafe_allow_html=True)
-    st.caption(
-        "위 조건의 피치·duty 를 목표로 두고, 학습된 대리 모형으로 NA·시그마·"
-        "초점·노광량을 훑어 통과하는 조건을 고릅니다. 판정은 추천기가 하고 "
-        "이 화면은 그대로 옮깁니다."
-    )
     _reccols = st.columns(4)
     with _reccols[0]:
         rec_prefix = st.text_input("번들 접두사", "models/s")
@@ -865,10 +847,6 @@ if nav == "조건 추천":
                 "그대로 찍어 줍니다.")
 
 if nav == "확률 모델":
-    st.caption(
-        "레지스트에 입사하는 광자 수는 포아송 분포를 따릅니다. "
-        "이 광자 산탄 잡음(photon shot noise)이 LER 과 확률적 결함의 근본 원인입니다."
-    )
 
     st.subheader("파장별 광자 통계 (현재 Dose 기준, 2×2 nm 영역)")
     rows = []
@@ -886,10 +864,6 @@ if nav == "확률 모델":
         width="stretch",
     )
     cur = ST.photon_statistics(dose_mj, wavelength, area_nm2=4.0)
-    st.info(
-        f"현재 파장 λ = {wavelength:.1f} nm · 광자 에너지 {cur['photon_energy_ev']:.2f} eV · "
-        f"2×2 nm 영역 광자 수 {cur['n_in_area']:.1f} · 상대 잡음 {100 * cur['relative_noise']:.2f} %"
-    )
 
     if st.button("확률 모델 실행", type="primary"):
         st.session_state["stoch_done"] = True
@@ -916,11 +890,18 @@ if nav == "확률 모델":
                            "분해 한계는 1/(행수×반복) 이므로, 공정에서 문제가 "
                            "되는 1e-9~1e-12 수준의 결함률은 이 방식으로 측정할 "
                            "수 없습니다.")
-            st.caption(
-                f"y 측정 길이 {mc['y_length_nm']:.0f} nm (행 {sr['n_rows']}, "
-                f"dy {sr['dy']:.2f} nm) · 총 경계 표본 {mc['n_samples']:,} 개. "
-                "LER 은 반복 횟수가 아니라 y 측정 길이에 수렴합니다."
-            )
+
+            # [14 주차] 설명문을 걷어내면서 이 줄까지 지웠다가 validate_w8 이
+            # 잡았다. 이것은 사족이 아니라 **측정 조건**이다. LER 은 반복
+            # 횟수가 아니라 y 측정 길이에 수렴하므로, 길이를 안 보이면 위
+            # 숫자가 무엇을 잰 값인지 알 수 없다(한계 103~114 의 처방 '가').
+            # 글월 대신 값으로만 띄운다.
+            st.markdown(UI.chips([
+                ("y 측정 길이", f"{mc['y_length_nm']:.0f}", "nm"),
+                ("행", f"{sr['n_rows']}", ""),
+                ("dy", f"{sr['dy']:.2f}", "nm"),
+                ("경계 표본", f"{mc['n_samples']:,}", "개"),
+            ]), unsafe_allow_html=True)
 
             st.subheader("결정론 모델 대 확률 모델")
             figs, axs = plt.subplots(2, 1, figsize=(9, 3.6), sharex=True)
@@ -967,23 +948,12 @@ if nav == "확률 모델":
                 figd.tight_layout()
                 st.pyplot(figd, clear_figure=True)
 
-            st.caption(
-                "본 모델은 광자 통계만 반영하며 레지스트 내부 화학 잡음은 포함하지 않으므로, "
-                "산출 LER 은 하한에 해당합니다. Dose 를 높이면 LER 이 감소하나 처리량이 저하됩니다."
-            )
     else:
         st.info("버튼을 눌러 확률 모델을 실행하세요.")
 
 
 if nav == "식별 가능성":
-    st.markdown("""
-#### 이 조건에서 공정 조건을 되짚을 수 있는가
-
-찍힌 패턴을 보고 공정 조건을 역으로 알아낼 때의 **원리적 한계**를 계산합니다.
-광자 수가 포아송 분포를 따른다는 사실로부터 Fisher 정보를 구하고,
-Cramér-Rao 하한을 산출합니다. **어떤 추정 방법을 쓰더라도 이보다 정확할 수
-없습니다.**
-""")
+    st.markdown(UI.section("되짚기 한계"), unsafe_allow_html=True)
     id_params = st.multiselect(
         "미지수로 둘 공정 변수", list(ID.PARAM_STEPS),
         default=list(ID.DEFAULT_PARAMS),
@@ -1059,11 +1029,6 @@ Cramér-Rao 하한을 산출합니다. **어떤 추정 방법을 쓰더라도 �
                     + ", ".join(f"{p} {c:+.3f}" for p, c in lost[:3]))
 
 if nav == "데이터셋":
-    st.caption(
-        "현재 광학·조명 조건을 고정하고 Defocus 와 Dose 를 격자 스윕하여 "
-        "머신러닝 학습용 샘플을 생성합니다. 한 건은 (공정 조건, 관측 프로파일, 라벨)로 "
-        "구성되며, 관측은 중앙 한 주기를 n_profile 점으로 재샘플링한 값입니다."
-    )
     d1, d2, d3 = st.columns(3)
     with d1:
         n_dz = st.select_slider("Defocus 분할", [3, 5, 7, 9], value=5)
