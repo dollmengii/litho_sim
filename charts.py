@@ -130,9 +130,16 @@ def _frame(h: int, xlo, xhi, ylo, yhi, xlabel, ylabel):
 
 
 def _open(h: int) -> str:
-    return (f'<svg viewBox="0 0 {W} {h}" width="100%" height="auto" '
+    # [14 주차] `height="auto"` 는 SVG **속성**으로는 무효다. 브라우저가
+    # 비율을 지키지 않고 제멋대로 높이를 줘서, viewBox 1000x300 짜리가
+    # 1053x911 로 그려졌다(실측). 그림이 세로로 늘어난 상자 가운데 떠
+    # 있어 위아래로 빈 띠가 생겼다. `height` 는 **CSS 속성**일 때만
+    # auto 가 통하므로 style 로 옮긴다. viewBox 가 있으면 브라우저가
+    # 고유 비율을 알아내 높이를 스스로 맞춘다.
+    return (f'<svg viewBox="0 0 {W} {h}" '
             f'preserveAspectRatio="xMidYMid meet" role="img" '
             f'style="display:block;background:{UI.BG};'
+            f'width:100%;height:auto;'
             f'border:1px solid {UI.LINE};border-radius:7px">')
 
 

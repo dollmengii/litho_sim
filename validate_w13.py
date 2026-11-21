@@ -2369,9 +2369,11 @@ _ch32 = _str_consts32("charts.py")
 _hex32 = [v for v in _ch32 if _re32.search(r"#[0-9A-Fa-f]{6}\b", v)]
 chk(not _hex32, "charts.py 가 색을 직접 적지 않는다 (ui.py 에서 받는다)",
     f"직접 적힌 색 {_hex32[:3]}")
-chk("STRIP_OFF = UI.BG" in open("charts.py", encoding="utf-8").read(),
+_chsrc32 = open("charts.py", encoding="utf-8").read()
+chk("STRIP_OFF = UI.BG" in _chsrc32,
     "띠의 빈 칸 색도 바탕에서 따라온다",
     "두 곳에 적으면 테마를 바꾸는 날 한쪽만 남는다")
+
 
 # 음성 대조 : 옛 문구를 되살리면 이 검사가 실제로 잡는가
 _fake32 = _rc32.replace('print("    미형성 영역에는 회귀 라벨이 없으므로, 질의가 거기로")',
@@ -2445,8 +2447,191 @@ chk(EX33._runs("z11 수차 0.02") ==
 chk(EX33._runs("NILS") == [("NILS", True)], "아스키뿐이면 한 토막이다")
 chk(EX33._runs("문턱") == [("문턱", False)], "한글뿐이면 한 토막이다")
 
+# 토막 가르기를 **만들어 놓고 안 쓴 자리**가 있었다. 제목 · 비고 · 꼬리말 ·
+# 값 칸이 그대로 c.drawString 이어서 그 안의 'CD' 가 타자기 글씨로 나왔고,
+# 값에 한글이 오면 글자가 통째로 빠질 자리였다. 고쳐 놓고 검사가 없으면
+# 다음에 한 줄 더 그릴 때 또 같은 자리로 돌아간다.
+_ex33 = _ast.parse(open("export.py", encoding="utf-8").read())
+_raw33 = []
+for _fn in [n for n in _ast.walk(_ex33) if isinstance(n, _ast.FunctionDef)]:
+    # `_draw` 는 토막을 실제로 그리는 곳, `_ascii` 는 아스키만 받겠다고
+    # 그 자리에서 막아 둔 곳이다. 이 둘만 예외다.
+    if _fn.name in ("_draw", "_ascii"):
+        continue
+    for _n in _ast.walk(_fn):
+        if not (isinstance(_n, _ast.Call)
+                and isinstance(_n.func, _ast.Attribute)
+                and _n.func.attr in ("drawString", "drawRightString")):
+            continue
+        _a = _n.args[2] if len(_n.args) > 2 else None
+        # 아스키 글자만 적힌 **글귀**라면 글꼴을 가를 이유가 없다.
+        if (isinstance(_a, _ast.Constant) and isinstance(_a.value, str)
+                and _a.value.isascii()):
+            continue
+        _raw33.append(_n.lineno)
+_raw33 = sorted(set(_raw33))   # 함수 안의 함수는 두 번 걸린다
+chk(not _raw33, "글을 그릴 때 _draw 를 거친다 (아스키 글귀만 예외)",
+    f"export.py {_raw33} 줄이 토막 가르기를 건너뛴다")
+chk(any(isinstance(n, _ast.Call) and isinstance(n.func, _ast.Attribute)
+        and n.func.attr == "drawString" for n in _ast.walk(_ex33)),
+    "검사에 탐지 능력이 있다 (drawString 자체는 쓰이고 있다)")
+
 
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+head(34, "SVG 가 제 비율로 그려지는가")
+
+# 왜 이 사례가 필요한가 : 14 주차에 **배포된 코드**에서 실제로 틀렸다.
+# 32 번은 색을 두 곳에 적은 문제였고 이것은 **값을 엉뚱한 자리에**
+# 적은 문제라 원인이 다르다 (114 번과 같은 부류다).
+
+# SVG 크기는 **CSS** 로 준다. `height="auto"` 를 속성으로 주면 무효라서
+# 브라우저가 비율을 안 지킨다. 실측 : viewBox 1000x300 이 1053x911 로
+# 그려져 그림이 세로로 늘어난 상자 가운데 떠 있었다.
+# 찾는 것은 **내보내는 문자열** 안의 그 꼴이다. 설명하는 주석까지 막으면
+# 다음 사람이 이유를 못 적는다 (22·32·33 번과 같다).
+import tokenize as _tk
+# 3.12 부터 f-문자열은 STRING 이 아니라 FSTRING_MIDDLE 로 쪼개져 나온다.
+# 이것을 빼면 정작 SVG 를 쓰는 f-문자열이 전부 안 보인다.
+_STRTOK = {_tk.STRING} | {getattr(_tk, "FSTRING_MIDDLE", _tk.STRING)}
+_chstr32 = "".join(
+    t.string
+    for t in _tk.generate_tokens(iter(_chsrc32.splitlines(True)).__next__)
+    if t.type in _STRTOK)
+chk("width:100%;height:auto" in _chstr32,
+    "검사가 보는 글자에 실제 SVG 문자열이 들어 있다",
+    "f-문자열을 못 보면 아래 검사 둘 다 공집합을 통과한다")
+chk('height="auto"' not in _chstr32,
+    'SVG 에 height="auto" 를 **속성**으로 주지 않는다',
+    "속성으로는 무효이고 비율이 깨진다")
+chk('height="auto"' in _chsrc32,
+    "왜 안 되는지는 주석으로 남아 있다",
+    "검사만 남고 이유가 없으면 다음 사람이 되돌린다")
+chk("height:auto" in _chstr32 and "width:100%" in _chstr32,
+    "크기를 style 로 준다 (viewBox 가 있으면 비율이 따라온다)")
+
+
+# ---------------------------------------------------------------------------
+head(35, "앱이 추천기에 넘기는 인자가 추천기에 실제로 있는가")
+
+# 왜 이 사례가 필요한가 : 110 번은 앱 쪽과 추천기 쪽이 **같은 이름을 서로
+# 다르게 적어** 난 사고였다(`models/s_mlp_formed` 대 `models/s_formed`).
+# 14 주차에 '조건 추천' 화면이 생기면서 같은 이음매가 하나 더 늘었다.
+# 화면은 추천기를 다시 구현하지 않고 인자만 조립하므로, 조립한 깃발이
+# 추천기에 없으면 버튼이 항상 종료 코드 2 로 죽는다. 그것을 여기서 잡는다.
+# 이 사례는 아직 틀린 적이 없다. 110 번과 **같은 종류**를 막는 것이다.
+import argparse as _ap35
+import ast as _ast35
+
+_app35 = open("app.py", encoding="utf-8").read()
+_t35 = _ast35.parse(_app35)
+
+# (가) 화면이 조립하는 깃발을 코드에서 읽는다. 글로 옮겨 적지 않는다.
+_flags35 = set()
+for _n in _ast35.walk(_t35):
+    if (isinstance(_n, _ast35.Assign)
+            and any(isinstance(t, _ast35.Name) and t.id == "rec_args"
+                    for t in _n.targets)):
+        for _e in _ast35.walk(_n.value):
+            if isinstance(_e, _ast35.Constant) and isinstance(_e.value, str) \
+                    and _e.value.startswith("--"):
+                _flags35.add(_e.value)
+    if (isinstance(_n, _ast35.Call)
+            and isinstance(_n.func, _ast35.Attribute)
+            and _n.func.attr == "append"
+            and isinstance(_n.func.value, _ast35.Name)
+            and _n.func.value.id == "rec_args"):
+        for _e in _n.args:
+            if isinstance(_e, _ast35.Constant) and str(_e.value).startswith("--"):
+                _flags35.add(_e.value)
+
+chk(len(_flags35) >= 15, "화면이 조립하는 깃발을 읽어 냈다", f"{len(_flags35)} 개")
+
+# (나) 추천기가 받는 깃발을 argparse 에서 직접 읽는다.
+import recommend as _RC35
+_known35 = set()
+_p35 = _ap35.ArgumentParser(add_help=False)
+_src35 = open("recommend.py", encoding="utf-8").read()
+for _n in _ast35.walk(_ast35.parse(_src35)):
+    if (isinstance(_n, _ast35.Call) and isinstance(_n.func, _ast35.Attribute)
+            and _n.func.attr == "add_argument"):
+        for _e in _n.args:
+            if isinstance(_e, _ast35.Constant) and str(_e.value).startswith("--"):
+                _known35.add(_e.value)
+chk(len(_known35) >= 20, "추천기가 받는 깃발을 읽어 냈다", f"{len(_known35)} 개")
+
+_unknown35 = sorted(_flags35 - _known35)
+chk(not _unknown35, "화면이 넘기는 깃발이 모두 추천기에 있다",
+    f"추천기에 없는 깃발 {_unknown35}")
+
+# (다) 검출력 : 있지도 않은 깃발이라면 반드시 걸려야 한다.
+chk(bool({"--없는깃발"} - _known35), "검사에 탐지 능력이 있다")
+
+# (마) 자식 실행에 **시한**이 있어야 한다. 없으면 격자를 크게 잡은 날
+# 화면이 영영 돌아오지 않는다.
+_rec_call35 = [
+    n for n in _ast35.walk(_t35)
+    if isinstance(n, _ast35.Call) and isinstance(n.func, _ast35.Attribute)
+    and n.func.attr == "run" and isinstance(n.func.value, _ast35.Name)
+    and n.func.value.id == "subprocess"
+]
+chk(len(_rec_call35) == 1, "앱이 자식을 부르는 곳은 한 군데",
+    f"{len(_rec_call35)} 군데")
+chk(all(any(k.arg == "timeout" for k in c.keywords) for c in _rec_call35),
+    "자식 실행에 시한이 있다", "시한이 없으면 화면이 돌아오지 않는다")
+
+# (바) 내려받기 단추를 `if st.button(...)` 안에 두지 않는다. 누르면 화면이
+# 다시 그려지고 그때 st.button 은 False 라서 결과가 통째로 사라진다.
+def _is_btn35(node) -> bool:
+    t = getattr(node, "test", None)
+    return (isinstance(t, _ast35.Call) and isinstance(t.func, _ast35.Attribute)
+            and t.func.attr == "button")
+
+
+_inside35 = []
+for _n in _ast35.walk(_t35):
+    if isinstance(_n, _ast35.If) and _is_btn35(_n):
+        for _c in _ast35.walk(_n):
+            if (isinstance(_c, _ast35.Call)
+                    and isinstance(_c.func, _ast35.Attribute)
+                    and _c.func.attr == "download_button"):
+                _inside35.append(_c.lineno)
+chk(not _inside35, "내려받기 단추가 st.button 블록 안에 있지 않다",
+    f"app.py {_inside35} 줄")
+
+# (사) `st.columns` 로 받은 이름을 **다른 뜻으로 다시 쓰지 않는다.**
+# 14 주차에 `_rc` 를 열 묶음과 종료 코드 두 가지로 써서, 지금은 안 터지지만
+# 줄 하나만 옮기면 조용히 깨지는 모양이 남아 있었다. 같은 칸에 다른 뜻을
+# 담는 것은 103~114 번을 꿰는 바로 그 버릇이다.
+def _cols35(v) -> bool:
+    return (isinstance(v, _ast35.Call) and isinstance(v.func, _ast35.Attribute)
+            and v.func.attr == "columns")
+
+
+_colnm35, _othnm35 = {}, {}
+for _n in _ast35.walk(_t35):
+    if not isinstance(_n, _ast35.Assign):
+        continue
+    _tg35 = []
+    for _t in _n.targets:
+        _tg35 += [x.id for x in _ast35.walk(_t) if isinstance(x, _ast35.Name)]
+    _d35 = _colnm35 if _cols35(_n.value) else _othnm35
+    for _nm in _tg35:
+        _d35.setdefault(_nm, []).append(_n.lineno)
+
+chk(len(_colnm35) >= 10, "st.columns 로 받는 이름을 읽어 냈다",
+    f"{len(_colnm35)} 개")
+_clash35 = sorted(set(_colnm35) & set(_othnm35))
+chk(not _clash35, "열 묶음 이름을 다른 뜻으로 다시 쓰지 않는다",
+    f"겹치는 이름 {[(c, _colnm35[c], _othnm35[c]) for c in _clash35[:3]]}")
+
+# (라) 라벨 표를 두 벌로 적지 않는다. 라벨 하나만 고치면 KeyError 가 난다.
+for _nm35 in ("SRC_CHOICES", "POL_CHOICES", "MSK_CHOICES"):
+    chk(_app35.count(_nm35 + " = ") == 1,
+        f"{_nm35} 를 한 곳에만 적는다",
+        "표가 둘이면 라벨을 고치는 날 한쪽만 남는다")
+
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
 # 합계를 낸다. 이 줄의 형식을 바꾸면 합계에 **0 으로** 들어가고, 문서에 적힌
@@ -2464,10 +2649,12 @@ print("""
    해석      Case 3, 5, 8, 9, 10, 12, 14, 15, 16, 18 — 측정 자체가 뜻을
              갖는 조건.
              음성 대조가 있다.
-   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33 — 코드가 지켜야 하는 관계.
+   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35 — 코드가 지켜야 하는 관계.
              Case 24 는 모형 파일 없이 번들을 손으로 만들어 관문을 잰다.\n             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
              꼴과의 **정확** 대조다(시뮬레이션이 아니다).
-   -> 33 개 사례 모두 **실제로 한 번 틀렸던 것**이며, 추측으로 넣은 항목은
-      없다. 물리 모델의 정당성은 여기서 다루지 않는다 (validate.py,
+   -> 35 개 가운데 34 개는 **실제로 한 번 틀렸던 것**이다. 35 번만은
+      아직 틀린 적이 없고, 110 번과 **같은 종류의 이음매**(앱과 추천기가
+      같은 이름을 서로 다르게 적는 것)를 막으려고 넣었다. 추측으로 넣은
+      항목은 없다. 물리 모델의 정당성은 여기서 다루지 않는다 (validate.py,
       validate_w12.py, claims.py).""")
 print("=" * 78)

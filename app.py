@@ -8,6 +8,10 @@ app.py -- 포토리소그래피 공정 시뮬레이터 GUI (Streamlit)
 구성만 둔다.
 """
 
+import os
+import subprocess
+import sys
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -73,8 +77,14 @@ UI.mpl_dark()
 
 st.set_page_config(page_title="포토리소그래피 공정 시뮬레이터", layout="wide")
 st.markdown(UI.css(), unsafe_allow_html=True)
-st.title("반도체 포토리소그래피 공정 시뮬레이터")
-st.caption("팀 노광맛집 · 참빛설계 : 조건을 바꾸며 상(像)·현상 결과·공정 윈도를 본다")
+# [14 주차] `st.title` 대신 우리 마크업으로 그린다. 제목 위의 작은 대문자
+# 머리표가 디자인의 핵심인데 Streamlit 에는 그 자리가 없다.
+st.markdown(UI.hero(
+    "PHOTOLITHOGRAPHY SIMULATOR",
+    "조건을 바꿔 가며 공정 윈도를 직접 잽니다",
+    "부분 결맞음 Hopkins 상형성으로 공중상을 계산하고, 초점과 노광량을 "
+    "쓸어 공정 윈도를 냅니다. 팀 노광맛집 · 광운대학교 참빛설계학기.",
+), unsafe_allow_html=True)
 
 
 # ───────────────────── 광학 인자 묶음 ─────────────────────
@@ -195,16 +205,62 @@ def stochastic_run(
             "tone": tone_, "dy": dy, "n_rows": n_rows}
 
 
-# ───────────────────── 사이드바: 입력 ─────────────────────
-sb = st.sidebar
+# ───────────────────── 왼쪽 레일: 브랜드 + 메뉴 ─────────────────────
+# [14 주차] 탭을 **왼쪽 메뉴**로 바꾸고 조건을 본문으로 내렸다.
+# 탭 막대는 화면 수가 늘수록 글자가 줄고, 지금 어느 화면인지도 약하게
+# 보인다. 메뉴는 자리가 넉넉하고 선택 상태가 분명하다.
+# 바꾸기 전에 탭 블록 사이로 값이 넘어가는지 확인했다(넘어가는 이름 없음).
+# 넘어가는 것이 있었다면 한 화면만 그리는 순간 조용히 깨졌을 것이다.
+NAV = ["마스크 패턴", "공간 광강도", "현상 후 패턴", "공정 윈도",
+       "조건 추천", "확률 모델", "식별 가능성", "데이터셋", "진단"]
+st.sidebar.markdown(UI.brand(), unsafe_allow_html=True)
+nav = st.sidebar.radio("화면", NAV, label_visibility="collapsed")
 
-with sb.expander("광학 조건", expanded=True):
+# ───────────────────── 본문: 조건 ─────────────────────
+# 핵심 넷만 꺼내 두고 나머지는 접는다. 조작부를 전부 펼쳐 두면 정작
+# 결과가 아래로 밀린다.
+# [14 주차] 화면의 라벨과 추천기에 넘길 값을 **한 곳에만** 적는다.
+# 두 곳에 적으면 라벨을 손보는 날 조용히 KeyError 가 난다(107 번과 같다).
+# 값은 (추천기에 넘길 인자, 내부 상수) 쌍이다.
+SRC_CHOICES = {"Conventional": ("conventional", IM.SOURCE_CONVENTIONAL),
+               "Annular": ("annular", IM.SOURCE_ANNULAR),
+               "Dipole": ("dipole", IM.SOURCE_DIPOLE),
+               "Quadrupole": ("quadrupole", IM.SOURCE_QUADRUPOLE)}
+POL_CHOICES = {"TE (선에 평행)": ("TE", IM.POL_TE),
+               "TM (선에 수직)": ("TM", IM.POL_TM),
+               "무편광": ("unpolarized", IM.POL_UNPOLARIZED),
+               "스칼라 (편광 무시)": ("scalar", IM.POL_SCALAR)}
+MSK_CHOICES = {"바이너리": ("binary", MK.MASK_BINARY),
+               "감쇠형 위상반전 (att-PSM)": ("att-psm", MK.MASK_ATT_PSM)}
+CLI, CONST = 0, 1   # 쌍의 자리 이름. [0]/[1] 로 적으면 뜻이 안 보인다.
+
+st.markdown(UI.section("조건"), unsafe_allow_html=True)
+_kc = st.columns(4)
+with _kc[0]:
+    na = st.slider("개구수 NA", 0.10, 1.60, 1.35, 0.01)
+with _kc[1]:
+    sigma_out = st.slider("조명 σ_out", 0.0, 1.0, 0.70, 0.01)
+with _kc[2]:
+    pitch = st.slider("Pitch [nm]", 20.0, 1000.0, 160.0, 1.0)
+with _kc[3]:
+    duty = st.slider("Duty Cycle (CD / Pitch)", 0.10, 0.90, 0.50, 0.01)
+
+sb = st.expander("전체 조건 펼치기", expanded=False)
+
+
+def _grp(title):
+    """조건 묶음 하나. 접힘 안에 접힘을 넣을 수 없으므로 칸과 제목으로 가른다."""
+    c = sb.container()
+    c.markdown(UI.section(title), unsafe_allow_html=True)
+    return c
+
+
+with _grp("광학 조건"):
     wavelength = st.slider("파장 λ [nm]", 13.5, 436.0, 193.0, 0.5)
     n_medium = st.selectbox(
         "결상 매질 굴절률 n", [1.00, 1.44], index=1,
         format_func=lambda v: f"{v:.2f}  ({'공기 (dry)' if v == 1.0 else '물 (ArF immersion)'})",
     )
-    na = st.slider("개구수 NA", 0.10, 1.60, 1.35, 0.01)
     # [13차 보완 98 번] 자릿수를 3 으로 올린다. 기본값이 0.288 / 0.745 인데
     # 기본 서식(%.2f)이 0.29 / 0.74 로 보여 주어, 화면에 적힌 값을 식에
     # 넣어 검산하면 지표 카드의 숫자(41.2 nm)가 재현되지 않았다. 간격은
@@ -212,11 +268,8 @@ with sb.expander("광학 조건", expanded=True):
     k1 = st.slider("공정 상수 k1", 0.25, 0.80, 0.288, 0.001, format="%.3f")
     k2 = st.slider("공정 상수 k2", 0.20, 1.50, 0.745, 0.005, format="%.3f")
 
-with sb.expander("조명 조건", expanded=True):
-    src_type = st.radio("광원 형상",
-                        ["Conventional", "Annular", "Dipole", "Quadrupole"],
-                        horizontal=True)
-    sigma_out = st.slider("σ_out", 0.0, 1.0, 0.70, 0.01)
+with _grp("조명 조건"):
+    src_type = st.radio("광원 형상", list(SRC_CHOICES), horizontal=True)
     sigma_in = (
         st.slider("σ_in", 0.0, 0.99, 0.60, 0.01) if src_type == "Annular" else 0.0
     )
@@ -226,26 +279,17 @@ with sb.expander("조명 조건", expanded=True):
         st.caption("조밀 선패턴은 0차와 1차만 pupil 양단에 넣는 다이폴이 유리함")
     else:
         pole_offset, pole_radius = 0.0, 0.15
-    source_shape = {"Conventional": IM.SOURCE_CONVENTIONAL,
-                    "Annular": IM.SOURCE_ANNULAR,
-                    "Dipole": IM.SOURCE_DIPOLE,
-                    "Quadrupole": IM.SOURCE_QUADRUPOLE}[src_type]
+    source_shape = SRC_CHOICES[src_type][CONST]
     n_src = st.select_slider("광원 샘플링 격자", [21, 31, 41, 51], value=31)
 
-with sb.expander("편광 (10주차)", expanded=True):
-    pol_label = st.radio(
-        "입사 편광",
-        ["TE (선에 평행)", "TM (선에 수직)", "무편광", "스칼라 (편광 무시)"],
-        index=0,
-    )
-    polarization = {"TE (선에 평행)": IM.POL_TE, "TM (선에 수직)": IM.POL_TM,
-                    "무편광": IM.POL_UNPOLARIZED,
-                    "스칼라 (편광 무시)": IM.POL_SCALAR}[pol_label]
+with _grp("편광 (10주차)"):
+    pol_label = st.radio("입사 편광", list(POL_CHOICES), index=0)
+    polarization = POL_CHOICES[pol_label][CONST]
     n_resist = st.slider("편광 계산 굴절률 (레지스트)", 1.00, 2.00, 1.70, 0.01)
     st.caption("상은 레지스트 안에서 맺히므로 레지스트 굴절률로 계산하는 편이 "
                "물리적임. 침지액 값(1.44)을 쓰면 편광 효과를 과대평가함.")
 
-with sb.expander("수차 · 플레어 · 스캔 (10주차)", expanded=False):
+with _grp("수차 · 플레어 · 스캔 (10주차)"):
     z6 = st.slider("Z6 비점수차 0° [waves]", 0.0, 0.15, 0.0, 0.005)
     z5 = st.slider("Z5 비점수차 45° [waves]", 0.0, 0.15, 0.0, 0.005)
     z7 = st.slider("Z7 코마 y [waves]", 0.0, 0.15, 0.0, 0.005)
@@ -258,13 +302,10 @@ with sb.expander("수차 · 플레어 · 스캔 (10주차)", expanded=False):
                    "이후의 광자 수를 평활함. 평균 상에서는 구별되지 않으나 "
                    "LER 에서는 구별됨.")
 
-with sb.expander("마스크 패턴", expanded=True):
-    pitch = st.slider("Pitch [nm]", 20.0, 1000.0, 160.0, 1.0)
-    duty = st.slider("Duty Cycle (CD / Pitch)", 0.10, 0.90, 0.50, 0.01)
+with _grp("마스크 패턴"):
     polarity = st.radio("극성", ["clear", "dark"], horizontal=True)
-    mask_label = st.radio("마스크 종류", ["바이너리", "감쇠형 위상반전 (att-PSM)"],
-                          horizontal=True)
-    mask_type = (MK.MASK_BINARY if mask_label == "바이너리" else MK.MASK_ATT_PSM)
+    mask_label = st.radio("마스크 종류", list(MSK_CHOICES), horizontal=True)
+    mask_type = MSK_CHOICES[mask_label][CONST]
     att_t = (st.slider("att-PSM 투과율", 0.03, 0.20, 0.06, 0.01)
              if mask_type == MK.MASK_ATT_PSM else MK.ATT_PSM_DEFAULT_T)
     if mask_type == MK.MASK_ATT_PSM:
@@ -273,12 +314,12 @@ with sb.expander("마스크 패턴", expanded=True):
     n_periods = st.slider("주기 수", 2, 16, 8, 1)
     dx_target = st.select_slider("목표 격자 간격 [nm]", [0.25, 0.5, 1.0, 2.0], value=0.5)
 
-with sb.expander("노광 / 레지스트", expanded=True):
+with _grp("노광 / 레지스트"):
     defocus = st.slider("Defocus Δz [nm]", -300.0, 300.0, 0.0, 5.0)
     dose = st.slider("Dose (상대값)", 0.3, 3.0, 1.0, 0.01)
     threshold = st.slider("PR 임계 광강도", 0.05, 0.95, 0.30, 0.01)
 
-with sb.expander("확률 레지스트 모델 (6주차)", expanded=False):
+with _grp("확률 레지스트 모델 (6주차)"):
     dose_mj = st.slider("Dose [mJ/cm²]", 2.0, 100.0, 30.0, 1.0)
     blur_nm = st.slider("레지스트 블러 [nm]", 0.0, 30.0, 8.0, 0.5)
     _blo, _bhi = ST.blur_range(wavelength)
@@ -291,7 +332,7 @@ with sb.expander("확률 레지스트 모델 (6주차)", expanded=False):
     if y_length < 1000:
         st.warning("y 측정 길이가 1000 nm 미만이면 LER 이 과소평가됩니다.")
 
-with sb.expander("공정 윈도 분석 (6주차)", expanded=False):
+with _grp("공정 윈도 분석 (6주차)"):
     dz_range = st.slider("Defocus 스윕 범위 ±[nm]", 100.0, 800.0, 400.0, 50.0)
     # 선택지가 전부 **홀수**인 것은 우연이 아니다. dz=0 이 격자점이어야 한다.
     # Bossung 은 dz=0 에서 극값을 가지므로, 노광량이 높아 최적 초점 CD 가
@@ -459,12 +500,10 @@ if rayleigh.get("dof_ratio"):
             f"달라진다. '공정 윈도' 탭의 측정 DOF 와 함께 읽을 것."
         )
 
-tab1, tab2, tab3, tab5, tab6, tab8, tab7, tab4 = st.tabs(
-    ["마스크 패턴", "공간 광강도", "현상 후 패턴", "공정 윈도",
-     "확률 모델", "식별 가능성", "데이터셋", "진단"]
-)
+# [14 주차] 탭 막대 대신 왼쪽 메뉴가 화면을 고른다. 고른 화면 하나만
+# 그리므로 나머지 화면의 연산도 돌지 않는다(그만큼 빨라진다).
 
-with tab1:
+if nav == "마스크 패턴":
     _t = np.abs(mask) ** 2
     st.markdown(CH.line(
         [(sim_grid.x, _t, UI.BEAM, "", True)],
@@ -487,7 +526,7 @@ with tab1:
         ("시야", f"{sim_grid.field_width:.0f}", "nm"),
     ]), unsafe_allow_html=True)
 
-with tab2:
+if nav == "공간 광강도":
     _ser = [(sim_grid.x, intensity_dosed, UI.BEAM,
              f"Δz = {defocus:.0f} nm", True)]
     if defocus != 0.0:
@@ -524,7 +563,7 @@ with tab2:
             if rayleigh["dof_high_na"] else ""
         )
 
-with tab3:
+if nav == "현상 후 패턴":
     profile = RS.resist_profile(intensity_dosed, threshold, tone)
     st.markdown(CH.strip(
         profile, sim_grid.field_width, h=160, on=UI.RESIST,
@@ -548,7 +587,7 @@ with tab3:
             "임계값을 이 범위 안으로 옮기거나 Defocus 를 줄이세요."
         )
 
-with tab5:
+if nav == "공정 윈도":
     st.caption(
         "Dose 는 정규화 광강도에 곱하는 스칼라이므로 결상 연산은 Defocus 에만 의존합니다. "
         f"{n_dose} x {n_focus} 격자를 {n_focus} 회 연산으로 처리합니다 "
@@ -573,13 +612,25 @@ with tab5:
             # 역산했으므로 하한이다.
             d5, d5_up = PR.dof_bracket_at_el(res["curve"], el_target)
             k2m = PR.k2_from_dof(d5, wavelength, na, n_medium)
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("dose-to-size E_op", f"{res['e_op']:.4f}")
-            m2.metric(f"DOF @ EL {el_target:.0f}% (하한)", f"{d5:.0f} nm",
-                      delta=f"상한 {d5_up:.0f} nm", delta_color="off")
-            m3.metric("역산 k2 (하한)", f"{k2m:.3f}",
-                      delta=f"{k2m - k2:+.3f} vs 입력")
-            m4.metric("PW 격자점", f"{int(res['pw'].sum())} / {res['pw'].size}")
+            # [14 주차] 지표 카드 대신 **여백과 선**으로 가른 큰 숫자 줄.
+            # 값은 고정폭, 단위는 작고 흐리게, 비고는 아래 한 줄.
+            _n_pass = int(res["pw"].sum())
+            st.markdown(
+                UI.pill("통과" if _n_pass else "위반",
+                        "pass" if _n_pass else "viol")
+                + f'<span style="color:{UI.MUTED};font-size:.82rem;'
+                  f'margin-left:.6rem">NA {na:.3f} · sigma {sigma_out:.3f} · '
+                  f'피치 {pitch:.0f} nm · duty {duty:.2f}</span>',
+                unsafe_allow_html=True)
+            st.markdown(UI.stats([
+                (f"DOF @ EL {el_target:.0f}%", f"{d5:.0f}", "nm",
+                 f"구간 [{d5:.0f}, {d5_up:.0f}] nm"),
+                ("dose-to-size E_op", f"{res['e_op']:.4f}", "", "최적 초점 기준"),
+                ("역산 k2 (하한)", f"{k2m:.3f}", "",
+                 f"입력 {k2:.3f} 대비 {k2m - k2:+.3f}"),
+                ("공정 윈도 격자점", f"{_n_pass}", f"/ {res['pw'].size}",
+                 f"통과율 {100 * _n_pass / res['pw'].size:.1f} %"),
+            ]), unsafe_allow_html=True)
 
             st.caption(
                 f"DOF 는 격자화 때문에 항상 작게 나오므로 구간 "
@@ -705,7 +756,102 @@ with tab5:
     else:
         st.info("버튼을 눌러 스윕을 실행하세요. 현재 설정 기준 수 초가 소요됩니다.")
 
-with tab6:
+# ───────────────────── 조건 추천 ─────────────────────
+# [14 주차] 과제 제목에 들어간 기능인데 화면이 없었다. 여기서 추천기를
+# **다시 구현하지 않는다.** `recommend.py` 를 그대로 불러 그 출력을 보인다.
+# 두 벌로 나누면 판정 기준이 조용히 갈라지고, 그것이 107 번에서 실제로
+# 났던 사고다. 화면은 인자를 모아 주고 결과를 읽기 좋게 놓을 뿐이다.
+if nav == "조건 추천":
+    st.markdown(UI.section("조건 추천"), unsafe_allow_html=True)
+    st.caption(
+        "위 조건의 피치·duty 를 목표로 두고, 학습된 대리 모형으로 NA·시그마·"
+        "초점·노광량을 훑어 통과하는 조건을 고릅니다. 판정은 추천기가 하고 "
+        "이 화면은 그대로 옮깁니다."
+    )
+    _reccols = st.columns(4)
+    with _reccols[0]:
+        rec_prefix = st.text_input("번들 접두사", "models/s")
+    with _reccols[1]:
+        rec_el = st.slider("목표 EL [%]", 3.0, 20.0, 10.0, 0.5)
+    with _reccols[2]:
+        rec_top = st.slider("상위 몇 개", 1, 10, 3, 1)
+    with _reccols[3]:
+        rec_cons = st.checkbox("보수 윈도", value=True)
+        rec_arms = st.checkbox("조합도 탐색", value=False)
+
+    rec_args = [
+        "--models", rec_prefix,
+        "--pitch", f"{pitch:.6g}", "--duty", f"{duty:.6g}",
+        "--el", f"{rec_el:.6g}", "--top", str(int(rec_top)),
+        "--flare", f"{flare:.6g}", "--msd-nm", f"{msd_nm:.6g}",
+        "--blur-nm", f"{blur_nm:.6g}",
+        "--z6", f"{z6:.6g}", "--z11", f"{z11:.6g}",
+        "--pol", POL_CHOICES[pol_label][CLI],
+        "--source", SRC_CHOICES[src_type][CLI],
+        "--mask", MSK_CHOICES[mask_label][CLI],
+    ]
+    if rec_cons:
+        rec_args.append("--conservative")
+    if rec_arms:
+        rec_args.append("--search-arms")
+
+    st.caption("실제로 도는 명령 (터미널에서도 같은 결과가 나옵니다)")
+    # 보여 주는 명령은 **그대로 쳐서 돌아가야** 한다. 접두사에 빈칸이 있으면
+    # 따옴표가 없을 때 두 인자로 쪼개진다.
+    st.code("py recommend.py " + " ".join(
+        f'"{a}"' if " " in a else a for a in rec_args), language="text")
+
+    REC_TIMEOUT_S = 1800   # 30 분. 격자를 크게 잡으면 길어진다.
+
+    if st.button("추천 돌리기", type="primary"):
+        # 자식의 출력을 줄 단위로 받기 위해 -u 를 준다. 14 주차에 이것이
+        # 없어 20 시간짜리 실행이 빈 화면으로 보였다(112 번 옆 사고).
+        _env = dict(os.environ)
+        _env["PYTHONIOENCODING"] = "utf-8"
+        _env["PYTHONUTF8"] = "1"
+        _env["PYTHONUNBUFFERED"] = "1"
+        try:
+            with st.spinner("추천기 실행 중..."):
+                _p = subprocess.run(
+                    [sys.executable, "-u", "recommend.py"] + rec_args,
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", env=_env, timeout=REC_TIMEOUT_S,
+                    cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
+                )
+            _rec_rc, _out = _p.returncode, (_p.stdout or "") + (_p.stderr or "")
+        except subprocess.TimeoutExpired as _te:
+            # 시한이 없으면 화면이 영영 돌아오지 않는다. 받은 데까지는 보인다.
+            _rec_rc = None
+            _out = ((_te.stdout or b"").decode("utf-8", "replace")
+                    if isinstance(_te.stdout, bytes) else (_te.stdout or ""))
+            _out += f"\n\n[{REC_TIMEOUT_S // 60} 분이 지나 중단했습니다. "
+            _out += "격자(--n-na, --n-sigma, --n-focus, --n-dose)를 줄이십시오.]"
+        # 결과를 session_state 에 둔다. 내려받기 단추를 누르면 화면이 다시
+        # 그려지는데, 그때 st.button 은 False 라서 블록 안에 두면 결과가
+        # 통째로 사라진다. 다른 화면도 모두 이 방식이다.
+        st.session_state["rec_out"] = _out
+        st.session_state["rec_rc"] = _rec_rc
+
+    if "rec_out" in st.session_state:
+        _rec_rc = st.session_state["rec_rc"]
+        _out = st.session_state["rec_out"]
+        # 종료 코드로 가른다. 글월에서 '없다' 같은 토막을 찾으면 성공한
+        # 실행을 실패로 읽는다(112·113 번에서 실제로 그랬다).
+        if _rec_rc == 0:
+            st.markdown(UI.pill("실행됨", "pass"), unsafe_allow_html=True)
+        elif _rec_rc is None:
+            st.markdown(UI.pill("시간 초과", "undet"), unsafe_allow_html=True)
+        else:
+            st.markdown(UI.pill(f"종료 코드 {_rec_rc}", "viol"),
+                        unsafe_allow_html=True)
+        st.code(_out or "(출력이 없습니다)", language="text")
+        st.download_button("추천 결과 txt 로 내려받기", _out,
+                           file_name="추천결과.txt", mime="text/plain")
+    else:
+        st.info("모형 번들이 있어야 돕니다. 없으면 추천기가 학습 명령을 "
+                "그대로 찍어 줍니다.")
+
+if nav == "확률 모델":
     st.caption(
         "레지스트에 입사하는 광자 수는 포아송 분포를 따릅니다. "
         "이 광자 산탄 잡음(photon shot noise)이 LER 과 확률적 결함의 근본 원인입니다."
@@ -816,7 +962,7 @@ with tab6:
         st.info("버튼을 눌러 확률 모델을 실행하세요.")
 
 
-with tab8:
+if nav == "식별 가능성":
     st.markdown("""
 #### 이 조건에서 공정 조건을 되짚을 수 있는가
 
@@ -899,7 +1045,7 @@ Cramér-Rao 하한을 산출합니다. **어떤 추정 방법을 쓰더라도 �
             st.info("가장 식별이 안 되는 방향: "
                     + ", ".join(f"{p} {c:+.3f}" for p, c in lost[:3]))
 
-with tab7:
+if nav == "데이터셋":
     st.caption(
         "현재 광학·조명 조건을 고정하고 Defocus 와 Dose 를 격자 스윕하여 "
         "머신러닝 학습용 샘플을 생성합니다. 한 건은 (공정 조건, 관측 프로파일, 라벨)로 "
@@ -1033,7 +1179,7 @@ with tab7:
         st.download_button("데이터셋 내려받기 (.npz)", buf.getvalue(),
                            file_name="litho_dataset.npz", mime="application/octet-stream")
 
-with tab4:
+if nav == "진단":
     st.subheader("회절 차수 통과 판정")
     orders = IM.diffraction_orders(pitch, wavelength, na, sigma_out, max_order=3)
     st.dataframe(

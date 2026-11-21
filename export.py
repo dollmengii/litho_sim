@@ -180,6 +180,17 @@ def _draw(c, x, y, txt, size, rgb) -> float:
     return x
 
 
+def _ascii(c, x, y, txt, size, rgb, bold: bool = False) -> None:
+    """아스키만 들어오는 글(머리표·표 이름). 한글이 섞이면 **그 자리에서**
+    멈춘다. 라틴 글꼴은 한글을 못 그려서 글자가 통째로 빠지는데, 조용히
+    빠지면 아무도 모른다. `_draw` 를 쓰라고 알려 주는 쪽이 낫다."""
+    if not str(txt).isascii():
+        raise ValueError(f"아스키가 아닌 글입니다. _draw 를 쓰십시오 : {txt!r}")
+    c.setFillColorRGB(*rgb)
+    c.setFont(NUM_B if bold else NUM, size)
+    c.drawString(x, y, str(txt))
+
+
 def _width(c, txt, size) -> float:
     """`_draw` 로 그렸을 때의 폭."""
     return sum(c.stringWidth(p, NUM if a else KO, size) for p, a in _runs(txt))
@@ -212,13 +223,11 @@ def to_pdf(b: dict) -> bytes:
     y = H - M
 
     # 머리표 + 제목
-    c.setFillColorRGB(*ACCENT)
-    c.setFont(NUM_B, 8)
-    c.drawString(M, y, "PHOTOLITHOGRAPHY SIMULATOR")
+    _ascii(c, M, y, "PHOTOLITHOGRAPHY SIMULATOR", 8, ACCENT, bold=True)
     y -= 24
-    c.setFillColorRGB(*INK)
-    c.setFont(KO, 19)
-    c.drawString(M, y, b["title"])
+    # 제목에도 라틴 글자가 섞인다("CD", "NILS"). CID 글꼴로 그리면 타자기처럼
+    # 벌어지므로 여기도 토막을 갈라 그린다.
+    _draw(c, M, y, str(b["title"]), 19, INK)
     y -= 16
     _draw(c, M, y, f"{b['when']}   ·   결과 코드 {b['code']}", 8.5, MUTED)
 
@@ -246,11 +255,11 @@ def to_pdf(b: dict) -> bytes:
         for i, (name, val, unit) in enumerate(b["results"][:cols]):
             x = M + i * cw
             _draw(c, x, y, name, 8.5, MUTED)
-            c.setFillColorRGB(*INK)
-            c.setFont(NUM, 23)
-            c.drawString(x, y - 27, str(val))
+            # 값에도 한글이 올 수 있다("판정 불가"). 라틴 글꼴로만 그리면
+            # 글자가 통째로 빠진다. 폭도 같은 규칙으로 잰다.
+            _draw(c, x, y - 27, str(val), 23, INK)
             if unit:
-                w = c.stringWidth(str(val), NUM, 23)
+                w = _width(c, str(val), 23)
                 _draw(c, x + w + 5, y - 27, unit, 11, MUTED)
         y -= 48
         c.setStrokeColorRGB(*LINE)
@@ -258,20 +267,16 @@ def to_pdf(b: dict) -> bytes:
         y -= 26
 
     def _table(title, rows, y0):
-        c.setFillColorRGB(*ACCENT)
-        c.setFont(NUM_B, 7.5)
-        c.drawString(M, y0, title)
+        _ascii(c, M, y0, title, 7.5, ACCENT, bold=True)
         yy = y0 - 15
         for name, val, unit in rows:
             if yy < M + 70:                      # 한 장을 넘기지 않는다
-                c.setFillColorRGB(*MUTED)
-                c.setFont(KO, 8)
-                c.drawString(M, yy, "... 나머지는 Excel 파일에 있습니다")
+                _draw(c, M, yy, "... 나머지는 Excel 파일에 있습니다", 9.5, MUTED)
                 return yy - 14
             _draw(c, M, yy, name, 9.5, INK)
-            c.setFillColorRGB(*INK)
-            c.setFont(NUM, 9.5)
-            c.drawRightString(W - M - 34, yy, str(val))
+            # 오른쪽 맞춤도 손으로 한다. drawRightString 은 글꼴 하나만 쓴다.
+            _draw(c, W - M - 34 - _width(c, str(val), 9.5), yy,
+                  str(val), 9.5, INK)
             if unit:
                 _draw(c, W - M - 30, yy, unit, 9, MUTED)
             c.setStrokeColorRGB(*LINE)
@@ -284,20 +289,17 @@ def to_pdf(b: dict) -> bytes:
     y = _table("CONDITIONS", b["conditions"], y - 8)
 
     if b.get("note"):
-        c.setFillColorRGB(*MUTED)
-        c.setFont(KO, 8)
         for ln in str(b["note"]).splitlines()[:4]:
-            c.drawString(M, y, ln)
+            _draw(c, M, y, ln, 8, MUTED)
             y -= 12
 
     # 면책 : 숫자를 **보는 자리**에 한 번 더 둔다
     c.setStrokeColorRGB(*LINE)
     c.setLineWidth(0.8)
     c.line(M, M + 30, W - M, M + 30)
-    c.setFillColorRGB(*MUTED)
-    c.setFont(KO, 7.5)
-    c.drawString(M, M + 16, FOOT)
-    c.drawString(M, M + 4, "노광맛집 · 광운대학교 전자통신공학과 참빛설계학기")
+    _draw(c, M, M + 16, FOOT, 7.5, MUTED)
+    _draw(c, M, M + 4, "노광맛집 · 광운대학교 전자통신공학과 참빛설계학기",
+          7.5, MUTED)
 
     c.showPage()
     c.save()

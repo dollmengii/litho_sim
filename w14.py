@@ -7,7 +7,7 @@
 사람이 눈으로 찾지 않아도 되게** 자동으로 검사한다.
 
     py w14.py 0        환경 점검 (30 초)
-    py w14.py 1        회귀 검증 445/445 확인 (1 분)
+    py w14.py 1        회귀 검증 463/463 확인 (1 분)
     py w14.py 2        데이터 생성 : 소규모 확인 후 본 생성 (약 20 시간)
     py w14.py 3        대리 모형 학습 3 회 (수십 분)
     py w14.py 4        추천기 한 번 (수 분)
@@ -203,17 +203,19 @@ def step1(a) -> None:
     got, tot = int(m.group(1)), int(m.group(2))
     if got != tot:
         raise Stop(f"회귀 {got}/{tot}. 실패한 사례가 있습니다. 진행 금지.")
-    if tot < 445:
+    if tot < 463:
         raise Stop(
-            f"회귀 총계가 {tot} 입니다. 445 이어야 합니다.\n"
+            f"회귀 총계가 {tot} 입니다. 463 이어야 합니다.\n"
             "  14 주차 수정이 안 들어간 옛 판입니다. zip 을 다시 푸십시오."
         )
-    for case in ("Case 24", "Case 25", "Case 26", "Case 27", "Case 28",
-                 "Case 29", "Case 30", "Case 31", "Case 32",
-                 "Case 33"):
-        if case not in txt:
-            raise Stop(f"{case} 가 없습니다. 14 주차 수정이 빠진 판입니다.")
-    say(f"\n  회귀 {got}/{tot} 통과. Case 24~33 전부 확인. 14 주차 판이 맞습니다.")
+    # 사례 번호를 손으로 늘어놓으면 사례를 더하는 날 여기를 잊는다.
+    # 24 번부터 마지막까지를 범위로 돌린다. 마지막 번호는 한 곳에만 적는다.
+    LAST_CASE = 35
+    for n in range(24, LAST_CASE + 1):
+        if f"Case {n}" not in txt:
+            raise Stop(f"Case {n} 가 없습니다. 14 주차 수정이 빠진 판입니다.")
+    say(f"\n  회귀 {got}/{tot} 통과. Case 24~{LAST_CASE} 전부 확인. "
+        "14 주차 판이 맞습니다.")
 
 
 # ----------------------------------------------------------------------

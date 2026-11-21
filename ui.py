@@ -227,6 +227,70 @@ hr {{ border-color: var(--line); margin: 1.1rem 0; }}
   overflow: hidden; border: 1px solid var(--line); margin: .3rem 0;
 }}
 .k-motif > div {{ flex: 1; }}
+
+/* --- 캔버스 디자인을 옮긴 부분 ------------------------------------- */
+
+/* Streamlit 의 기본 머리띠와 '배포' 단추를 지운다. 화면 맨 위가 우리
+   머리표로 시작해야 레이아웃이 디자인과 같아진다 */
+header[data-testid="stHeader"] {{ background: transparent; height: 0; }}
+[data-testid="stToolbar"] {{ display: none; }}
+#MainMenu, footer {{ visibility: hidden; }}
+
+/* 사이드바를 '레일' 로. 브랜드 마크가 맨 위에 앉는다 */
+section[data-testid="stSidebar"] > div {{ padding-top: 1.6rem; }}
+.k-brand {{ margin: 0 0 1.4rem 0; }}
+.k-brand .n {{ font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em; }}
+.k-brand .s {{
+  font-family: {MONO}; font-size: .66rem; letter-spacing: .14em;
+  color: var(--muted); margin-top: .15rem;
+}}
+
+/* 왼쪽 메뉴 : 라디오 단추를 **목록**처럼 보이게 한다.
+   동그란 단추를 지우고 한 줄 전체를 누를 수 있는 칸으로 만든다.
+   선택된 칸만 연보라 바탕 + 굵은 글씨 */
+section[data-testid="stSidebar"] [role="radiogroup"] {{ gap: 2px; }}
+section[data-testid="stSidebar"] [role="radiogroup"] label {{
+  width: 100%; padding: .5rem .7rem; border-radius: 8px; margin: 0;
+  font-size: .88rem !important; color: var(--muted); cursor: pointer;
+}}
+section[data-testid="stSidebar"] [role="radiogroup"] label:hover {{
+  background: var(--bg);
+}}
+section[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {{
+  display: none;                 /* 동그란 단추를 지운다 */
+}}
+section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
+  background: {PASS_BG}; color: var(--txt); font-weight: 600;
+}}
+
+/* 히어로 : 머리표 + 큰 제목 + 설명 */
+.k-hero {{ padding-bottom: 1.1rem; border-bottom: 1px solid var(--line); }}
+.k-hero .e {{
+  font-family: {MONO}; font-size: .70rem; letter-spacing: .16em;
+  color: var(--accent); font-weight: 500;
+}}
+.k-hero .t {{
+  font-size: 2.0rem; font-weight: 700; letter-spacing: -0.035em;
+  line-height: 1.15; margin: .35rem 0 0 0;
+}}
+.k-hero .d {{
+  font-size: .88rem; color: var(--muted); margin: .5rem 0 0 0;
+  line-height: 1.7; max-width: 62ch;
+}}
+
+/* 큰 숫자 줄 : 카드가 아니라 **여백과 선**으로 가른다 */
+.k-stats {{
+  display: grid; gap: 1.6rem; margin: 1.5rem 0 1.3rem 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}}
+.k-stat .l {{ font-size: .76rem; color: var(--muted); margin-bottom: .45rem; }}
+.k-stat .v {{
+  font-family: {MONO}; font-size: 2.1rem; font-weight: 500;
+  letter-spacing: -0.03em; line-height: 1;
+}}
+.k-stat .u {{ font-family: {SANS}; font-size: .8rem; color: var(--muted); margin-left: .25rem; }}
+.k-stat .n {{ font-size: .70rem; color: var(--muted); margin-top: .5rem; }}
+.k-rule {{ border-top: 1px solid var(--line); margin: 1.3rem 0; }}
 </style>
 """
 
@@ -278,6 +342,48 @@ def motif(blurs=(3.0, 1.7, 0.8, 0.0), pitch=16, line=7) -> str:
         f'filter:blur({b}px)"></div>'
         for b in blurs)
     return f'<div class="k-motif" aria-hidden="true">{cells}</div>'
+
+
+def brand(name: str = "노광맛집", sub: str = "LITHO SIM") -> str:
+    """사이드바 맨 위의 브랜드 마크. 레일처럼 보이게 하는 첫 조각이다."""
+    return (f'<div class="k-brand"><div class="n">{name}</div>'
+            f'<div class="s">{sub}</div></div>')
+
+
+def hero(eyebrow: str, title: str, desc: str = "") -> str:
+    """머리표 + 큰 제목 + 설명.
+
+    `st.title` 을 쓰지 않는 이유 : 제목 위의 **작은 대문자 머리표**가
+    디자인의 핵심인데 Streamlit 에는 그 자리가 없다. 한 덩어리로 그린다.
+    """
+    d = f'<p class="d">{desc}</p>' if desc else ""
+    return (f'<div class="k-hero"><div class="e">{eyebrow}</div>'
+            f'<h1 class="t">{title}</h1>{d}</div>')
+
+
+def stats(items) -> str:
+    """큰 숫자 줄. (이름, 값, 단위, 비고) 를 받는다.
+
+    `st.metric` 을 쓰지 않는 이유 : 지표 카드는 테두리 상자로 그려진다.
+    이 디자인은 **카드가 아니라 여백과 선**으로 가르므로, 같은 내용을
+    상자 없이 그린다. 값은 고정폭, 단위는 작고 흐리게.
+    """
+    out = ['<div class="k-stats">']
+    for it in items:
+        name, val = it[0], it[1]
+        unit = it[2] if len(it) > 2 else ""
+        note = it[3] if len(it) > 3 else ""
+        u = f'<span class="u">{unit}</span>' if unit else ""
+        n_ = f'<div class="n">{note}</div>' if note else ""
+        out.append(f'<div class="k-stat"><div class="l">{name}</div>'
+                   f'<div class="v">{val}{u}</div>{n_}</div>')
+    out.append("</div>")
+    return "".join(out)
+
+
+def rule() -> str:
+    """머리카락 굵기 구분선. `st.divider` 보다 얇고 여백이 작다."""
+    return '<div class="k-rule"></div>'
 
 
 def mpl_theme() -> None:
