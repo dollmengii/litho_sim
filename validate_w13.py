@@ -2639,23 +2639,32 @@ head(36, "레일을 접었다가 다시 펼 수 있는가")
 # 왜 이 사례가 필요한가 : 14 주차에 **쓰는 사람이 실제로 막혔다.** 디자인을
 # 맞추려고 Streamlit 기본 머리띠 높이를 0 으로 눌렀는데, 레일을 다시 펴는
 # 화살표가 그 머리띠 안에 들어 있었다. 한 번 접으면 새로 고치는 것 말고는
-# 되돌릴 길이 없었다. '보이지 않게 한 것'과 '없앤 것'을 구별하지 않은 셈이라
-# 103~114 번과 같은 부류다.
+# 되돌릴 길이 없었다.
+#
+# 첫 수정은 화살표만 골라 꺼내려고 `data-testid` 이름을 적는 것이었는데,
+# **그래도 안 나왔다.** 판마다 이름이 다르기 때문이다. 이름을 맞히는 방식은
+# 맞았는지 확인할 길이 없으면 고쳤다고 말할 수 없다. 그래서 **가리지 않는
+# 쪽**으로 바꿨다. 이 검사가 지키는 것은 그 결정이다.
 import ui as UI36
 
 _css36 = UI36.css()
-_hides36 = 'header[data-testid="stHeader"]' in _css36 and "height: 0" in _css36
-chk(_hides36, "머리띠를 눌러 두고 있다 (이 사례의 전제)")
+_hdr36 = _css36[_css36.index('header[data-testid="stHeader"]'):][:200]
+chk("height: 0" not in _hdr36,
+    "머리띠 높이를 0 으로 누르지 않는다",
+    "눌러 두면 그 안의 펼침 화살표가 잘려 나간다")
+chk("background: transparent" in _hdr36,
+    "머리띠는 투명하게만 두어 자리를 남긴다")
+chk("overflow: visible" in _hdr36,
+    "머리띠가 제 안의 것을 잘라 내지 않는다")
+chk('[data-testid="stToolbar"]' in _css36 and "display: none" in _css36,
+    "지울 것은 머리띠가 아니라 '배포' 단추 쪽이다")
+# 이름을 맞히는 규칙은 덤으로 남겨 두되, **그것에 기대지 않는다**는 것이
+# 위 세 검사의 뜻이다.
 chk('[data-testid="stSidebarCollapsedControl"]' in _css36,
-    "접힌 레일을 펴는 화살표를 되살린다",
-    "머리띠를 숨기면 같이 사라져 되돌릴 길이 없어진다")
-chk('[data-testid="collapsedControl"]' in _css36,
-    "판이 다른 Streamlit 의 옛 이름도 함께 적는다",
-    "이름이 하나만 맞으면 다른 판에서 또 막힌다")
-chk("display: flex !important" in _css36,
-    "숨김을 덮어쓴다 (!important 없이는 기본 규칙에 진다)")
-chk("position: fixed" in _css36,
-    "머리띠 높이가 0 이므로 화살표는 따로 띄워 둔다")
+    "이름이 맞는 판에서는 화살표를 더 잘 보이게 한다 (덤)")
+chk("position: fixed" not in _css36[_css36.index("덤이다"):][:400],
+    "덤 규칙이 화살표를 제자리에서 옮기지 않는다",
+    "머리띠가 살아 있으므로 옮기면 두 군데에 보이거나 겹친다")
 
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스

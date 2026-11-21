@@ -79,12 +79,9 @@ st.set_page_config(page_title="포토리소그래피 공정 시뮬레이터", la
 st.markdown(UI.css(), unsafe_allow_html=True)
 # [14 주차] `st.title` 대신 우리 마크업으로 그린다. 제목 위의 작은 대문자
 # 머리표가 디자인의 핵심인데 Streamlit 에는 그 자리가 없다.
-st.markdown(UI.hero(
-    "PHOTOLITHOGRAPHY SIMULATOR",
-    "조건을 바꿔 가며 공정 윈도를 직접 잽니다",
-    "부분 결맞음 Hopkins 상형성으로 공중상을 계산하고, 초점과 노광량을 "
-    "쓸어 공정 윈도를 냅니다. 팀 노광맛집 · 광운대학교 참빛설계학기.",
-), unsafe_allow_html=True)
+st.markdown(UI.hero("PHOTOLITHOGRAPHY SIMULATOR",
+                    "조건을 바꿔 가며 공정 윈도를 직접 잽니다"),
+            unsafe_allow_html=True)
 
 
 # ───────────────────── 광학 인자 묶음 ─────────────────────
@@ -235,33 +232,26 @@ MSK_CHOICES = {"바이너리": ("binary", MK.MASK_BINARY),
 CLI, CONST = 0, 1   # 쌍의 자리 이름. [0]/[1] 로 적으면 뜻이 안 보인다.
 
 st.markdown(UI.section("조건"), unsafe_allow_html=True)
+# [14 주차] 어떤 화면은 NA·σ 를 쓰지 않는다. '마스크 패턴' 은 빛을 쬐기
+# 전의 모양만 그리므로 광학 조건과 무관하고, '조건 추천' 은 추천기가 그 둘을
+# 직접 훑는다. 말로 적어 두니 화면이 설명문으로 덮였다. 글 대신 **슬라이더를
+# 꺼서** 알린다. 끈 슬라이더도 값은 그대로 지녀 다른 화면에서 이어 쓴다.
+OPTICS_IDLE = {"마스크 패턴", "조건 추천"}
+_idle = nav in OPTICS_IDLE
+_help = ("이 화면은 NA·σ 를 쓰지 않습니다. '공간 광강도' 부터 듣습니다."
+         if _idle else None)
+
 _kc = st.columns(4)
 with _kc[0]:
-    na = st.slider("개구수 NA", 0.10, 1.60, 1.35, 0.01)
+    na = st.slider("개구수 NA", 0.10, 1.60, 1.35, 0.01,
+                   disabled=_idle, help=_help)
 with _kc[1]:
-    sigma_out = st.slider("조명 σ_out", 0.0, 1.0, 0.70, 0.01)
+    sigma_out = st.slider("조명 σ_out", 0.0, 1.0, 0.70, 0.01,
+                          disabled=_idle, help=_help)
 with _kc[2]:
     pitch = st.slider("Pitch [nm]", 20.0, 1000.0, 160.0, 1.0)
 with _kc[3]:
     duty = st.slider("Duty Cycle (CD / Pitch)", 0.10, 0.90, 0.50, 0.01)
-
-# [14 주차] 어떤 화면은 위 넷 가운데 일부만 쓴다. '마스크 패턴' 은 마스크만
-# 그리므로 NA 와 σ 를 아무리 움직여도 그림이 그대로다. 말해 주지 않으면
-# 슬라이더가 고장 난 것처럼 보인다 -- 실제로 그렇게 읽혔다.
-SCREEN_INPUTS = {
-    "마스크 패턴": ("Pitch · Duty · 마스크 조건",
-                "NA 와 σ 는 **이 화면에 영향이 없습니다.** 마스크 자체는 "
-                "빛을 쬐기 전의 모양이라 광학 조건과 무관합니다. "
-                "둘의 효과는 '공간 광강도' 부터 보입니다."),
-    "조건 추천": ("Pitch · Duty · 전체 조건",
-              "NA 와 σ 는 추천기가 **직접 훑는 값**이라 위에서 정한 값을 "
-              "쓰지 않습니다. 나머지 조건은 그대로 넘어갑니다."),
-}
-_si = SCREEN_INPUTS.get(nav)
-if _si:
-    st.caption(f"이 화면이 쓰는 조건 : {_si[0]}. {_si[1]}")
-else:
-    st.caption("이 화면은 위 네 조건과 '전체 조건' 을 모두 씁니다.")
 
 sb = st.expander("전체 조건 펼치기", expanded=False)
 
