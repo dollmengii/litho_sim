@@ -236,6 +236,23 @@ header[data-testid="stHeader"] {{ background: transparent; height: 0; }}
 [data-testid="stToolbar"] {{ display: none; }}
 #MainMenu, footer {{ visibility: hidden; }}
 
+/* 레일을 접으면 다시 펼치는 화살표가 **머리띠 안**에 들어 있다. 위에서
+   머리띠 높이를 0 으로 눌렀더니 그 화살표까지 같이 사라져서, 한 번 접으면
+   새로 고치는 것 말고는 되돌릴 길이 없었다. 화살표만 꺼내 고정해 둔다.
+   판에 따라 이름이 둘이라 둘 다 적는다 */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {{
+  display: flex !important; visibility: visible !important;
+  position: fixed; top: .75rem; left: .75rem; z-index: 1000;
+}}
+[data-testid="stSidebarCollapsedControl"] button,
+[data-testid="collapsedControl"] button {{
+  background: {SURF}; border: 1px solid {LINE}; border-radius: 8px;
+  color: {TXT}; box-shadow: 0 1px 3px rgba(21,19,26,.08);
+}}
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="collapsedControl"] svg {{ fill: {TXT}; color: {TXT}; }}
+
 /* 사이드바를 '레일' 로. 브랜드 마크가 맨 위에 앉는다 */
 section[data-testid="stSidebar"] > div {{ padding-top: 1.6rem; }}
 .k-brand {{ margin: 0 0 1.4rem 0; }}
