@@ -109,16 +109,68 @@ def _unpack_optics(optx):
     return opt, mtype, att
 
 
+# ───────────────────── 마스크 극성 × 레지스트 톤 ─────────────────────
+# [14주차] 현장에서 이 둘은 **따로 고르는 것**이다. 마스크가 clear-field 인지
+# dark-field 인지와, 레지스트가 positive 인지 negative 인지는 서로 독립이다.
+# 네 조합이 모두 쓰이고, 특히 negative tone development(NTD)는 침지 노광의
+# 트렌치·홀 층에서 표준에 가깝다. 13주차까지는 손잡이 하나가 둘을 묶어
+# 대각선 두 조합만 만들 수 있었다.
+#
+# 마스크의 feature 는 어느 경우에나 duty*pitch 폭이다. 갈리는 것은 **현상
+# 뒤에 남는 것이 그 feature 자신인지, 그 사이 공간인지** 다.
+RESIST_CHOICES = {"Positive (노광부 제거)": False,
+                  "Negative (노광부 잔존 · NTD)": True}
+MASKPOL_CHOICES = {"Clear-field (feature 가 빛을 통과)": True,
+                   "Dark-field (feature 가 빛을 막음)": False}
+
+
+def mask_desc(duty: float, pitch: float, mask_clear: bool,
+              resist_neg: bool) -> tuple[float, str]:
+    """측정할 선이 **격자 한가운데**에 오도록 같은 마스크를 기술한다.
+
+    선/공간은 주기 무늬라, 폭 w 인 A-tone 선을 가운데 둔 기술과 폭
+    pitch-w 인 B-tone 선을 가운데 둔 기술은 **같은 무늬를 반 주기 옮겨
+    적은 것**이다. 물리는 달라지지 않는다.
+
+    왜 필요한가 : `extract_cd` 와 `edge_positions` 는 격자 한가운데에서
+    바깥으로 걸어 나가며 경계를 찾는다. 남는 선이 가운데에 없으면 아예
+    못 찾는다. 네 조합 가운데 둘(clear+positive, dark+negative)에서는
+    남는 것이 마스크 feature 가 아니라 **그 사이 공간**이므로, 그 공간을
+    가운데로 옮겨 적어야 잴 수 있다.
+
+    돌려주는 것 : (가운데 선의 폭, 그 선의 tone 을 나타내는 polarity 문자열).
+    폭은 곧 공정 윈도의 **목표 CD** 이기도 하다.
+    """
+    w = printed_cd(duty, pitch, mask_clear, resist_neg)
+    return w, ("clear" if resist_neg else "dark")
+
+
+def printed_cd(duty: float, pitch: float, mask_clear: bool,
+               resist_neg: bool) -> float:
+    """현상 뒤 **남는 선**의 폭 [nm]. 공정 윈도 판정의 목표가 되는 값이다.
+
+    남는 것이 마스크 feature 자신인 경우는 둘이다.
+      - clear-field + negative : 빛을 받은 feature 가 남는다
+      - dark-field  + positive : 빛을 못 받은 feature 가 남는다
+    나머지 둘에서는 feature 가 지워지고 **그 사이 공간**이 남으므로
+    남는 폭은 pitch - duty*pitch 가 된다.
+    """
+    return duty * pitch if mask_clear == resist_neg else (1.0 - duty) * pitch
+
+
 # ───────────────────── 연산 캐시 ─────────────────────
 @st.cache_data(show_spinner=False)
 def compute(
     pitch, duty, polarity, n_periods, dx_target,
     wavelength, na, n_medium, sigma_out, sigma_in, n_src, defocus, optx,
+    tone_in,
 ):
     """슬라이더 값이 같으면 재연산하지 않도록 캐싱한다."""
     opt, mtype, att = _unpack_optics(optx)
     g = G.build_grid(pitch=pitch, n_periods=n_periods, dx_target=dx_target)
-    m = MK.line_space(g, cd=duty * pitch, polarity=polarity,
+    _w, _pol = mask_desc(duty, pitch, polarity == "clear",
+                         tone_in == RS.TONE_BRIGHT)
+    m = MK.line_space(g, cd=_w, polarity=_pol,
                       mask_type=mtype, att_t=att)
     i = IM.aerial_image(
         g, m, wavelength, na,
@@ -132,12 +184,14 @@ def compute(
 def sweep(
     pitch, duty, polarity, n_periods, dx_target,
     wavelength, na, n_medium, sigma_out, sigma_in, n_src,
-    dz_range, n_focus, n_dose, dose_span, threshold, tol, optx,
+    dz_range, n_focus, n_dose, dose_span, threshold, tol, optx, tone_in,
 ):
     """Dose-Focus 스윕. 결상 연산은 Defocus 에만 의존하므로 n_focus 회만 수행."""
     opt, mtype, att = _unpack_optics(optx)
     g = G.build_grid(pitch=pitch, n_periods=n_periods, dx_target=dx_target)
-    m = MK.line_space(g, cd=duty * pitch, polarity=polarity,
+    _w, _pol = mask_desc(duty, pitch, polarity == "clear",
+                         tone_in == RS.TONE_BRIGHT)
+    m = MK.line_space(g, cd=_w, polarity=_pol,
                       mask_type=mtype, att_t=att)
     # [12차 보완 69 번] 슬라이더 선택지가 전부 홀수라는 **주석**에만 기대지
     # 않는다. dz=0 이 격자점이어야 Bossung 극값의 금지대를 밟고(66 번), 바로
@@ -149,21 +203,35 @@ def sweep(
     I = PR.focus_sweep(g, m, wavelength, na, n_medium=n_medium,
                        sigma_out=sigma_out, sigma_in=sigma_in,
                        defocuses=dz, n_source_grid=n_src, **opt)
-    target = duty * pitch
+    # 목표는 '마스크 feature 폭' 이 아니라 **현상 뒤 남는 선의 폭** 이다.
+    target = printed_cd(duty, pitch, polarity == "clear",
+                        tone_in == RS.TONE_BRIGHT)
     i0 = int(np.argmin(np.abs(dz)))
-    e_op = PR.dose_to_size(g, I[i0], target, threshold,
-                           RS.TONE_BRIGHT if polarity == "clear" else RS.TONE_DARK,
+    e_op = PR.dose_to_size(g, I[i0], target, threshold, tone_in,
                            max_width=pitch)
     if not np.isfinite(e_op):
         return None
     doses = e_op * np.linspace(1 - dose_span, 1 + dose_span, n_dose)
-    cd = PR.cd_matrix(g, I, doses, threshold,
-                      RS.TONE_BRIGHT if polarity == "clear" else RS.TONE_DARK,
-                      max_width=pitch)
+    # tone 은 **넘겨받은 것**을 쓴다. 여기서 polarity 로 다시 유도하면
+    # 마스크·e_op 와 다른 tone 으로 재게 되어 통과 칸이 통째로 틀어진다.
+    cd = PR.cd_matrix(g, I, doses, threshold, tone_in, max_width=pitch)
+    # MEEF : 마스크 CD 를 +-delta 흔들고 **같은 dose** 로 웨이퍼 CD 를 잰다.
+    # dose 를 다시 잡으면 정의상 CD 가 목표로 돌아가 늘 1 근처가 나온다.
+    _d_meef = 2.0
+    _ims = []
+    for _dw in (-_d_meef, +_d_meef):
+        _mm = MK.line_space(g, cd=_w + _dw, polarity=_pol,
+                            mask_type=mtype, att_t=att)
+        _ims.append(IM.aerial_image(g, _mm, wavelength, na, n_medium=n_medium,
+                                    sigma_out=sigma_out, sigma_in=sigma_in,
+                                    defocus=0.0, n_source_grid=n_src, **opt))
+    meef_v = PR.meef(g, _ims[0], _ims[1], _w - _d_meef, _w + _d_meef,
+                     threshold, tone_in, dose=float(e_op), max_width=pitch)
+
     pw = PR.process_window(cd, target, tol)
     return {
         "dz": dz, "doses": doses, "e_op": e_op, "cd": cd, "pw": pw,
-        "target": target, "sat": PR.window_saturated(pw),
+        "target": target, "sat": PR.window_saturated(pw), "meef": meef_v,
         "curve": PR.el_dof_curve(pw, doses, dz),
         "dz_note": dz_note,
     }
@@ -173,7 +241,7 @@ def sweep(
 def stochastic_run(
     pitch, duty, polarity, n_periods, dx_target,
     wavelength, na, n_medium, sigma_out, sigma_in, n_src,
-    dose_mj, blur_nm, threshold, y_length, n_trials, defocus, optx,
+    dose_mj, blur_nm, threshold, y_length, n_trials, defocus, optx, tone_in,
 ):
     """확률 레지스트 모델 실행. dose-to-size 보정 후 Monte Carlo.
 
@@ -185,14 +253,18 @@ def stochastic_run(
     dy = max(0.25, blur_nm / 3.0) if blur_nm > 0 else 0.5
     n_rows = max(64, int(round(y_length / dy)))
     g = G.build_grid(pitch=pitch, n_periods=n_periods, dx_target=dx_target)
-    m = MK.line_space(g, cd=duty * pitch, polarity=polarity,
+    _w, _pol = mask_desc(duty, pitch, polarity == "clear",
+                         tone_in == RS.TONE_BRIGHT)
+    m = MK.line_space(g, cd=_w, polarity=_pol,
                       mask_type=mtype, att_t=att)
     I = IM.aerial_image(g, m, wavelength, na, n_medium=n_medium,
                         sigma_out=sigma_out, sigma_in=sigma_in,
                         defocus=defocus, n_source_grid=n_src, **opt)
-    tone_ = RS.TONE_BRIGHT if polarity == "clear" else RS.TONE_DARK
-    e_op = PR.dose_to_size(g, I, duty * pitch, threshold, tone_,
-                           max_width=pitch)
+    tone_ = tone_in
+    e_op = PR.dose_to_size(g, I,
+                           printed_cd(duty, pitch, polarity == "clear",
+                                      tone_ == RS.TONE_BRIGHT),
+                           threshold, tone_, max_width=pitch)
     if not np.isfinite(e_op):
         return None
     In = I * e_op
@@ -329,10 +401,15 @@ with _grp("마스크 패턴"):
     # 손잡이를 꺼서 알린다 (NA·σ 와 같은 방식).
     POLARITY_IDLE = {"데이터셋", "식별 가능성"}
     _pol_idle = nav in POLARITY_IDLE
-    polarity = st.radio("극성", ["clear", "dark"], horizontal=True,
-                        key="k_polarity", disabled=_pol_idle,
-                        help=("이 화면은 극성을 쓰지 않습니다 (언제나 clear "
-                              "로 계산합니다).") if _pol_idle else None)
+    _pol_help = ("이 화면은 마스크 극성을 쓰지 않습니다 (언제나 clear-field "
+                 "로 계산합니다).") if _pol_idle else None
+    mask_pol_label = st.radio("마스크 극성", list(MASKPOL_CHOICES),
+                              key="k_maskpol", disabled=_pol_idle,
+                              help=_pol_help)
+    resist_label = st.radio("레지스트 톤", list(RESIST_CHOICES),
+                            key="k_resist", disabled=_pol_idle,
+                            help=_pol_help)
+    polarity = "clear" if MASKPOL_CHOICES[mask_pol_label] else "dark"
     mask_label = st.radio("마스크 종류", list(MSK_CHOICES), horizontal=True)
     mask_type = MSK_CHOICES[mask_label][CONST]
     att_t = (st.slider("att-PSM 투과율", 0.03, 0.20, 0.06, 0.01)
@@ -389,8 +466,22 @@ with _grp("공정 윈도 분석 (6주차)"):
         f"결정론 윈도에 주는 것이므로 확률 변동 몫이 남지 않습니다."
     )
     el_target = st.slider("DOF 산출 기준 EL [%]", 1.0, 20.0, 10.0, 0.5)
+    # [14주차] 마스크 CDU. CD 예산에 **빠져 있던 항**이다. 업계 예산은
+    #   CD 예산^2 = 공정윈도^2 + 확률변동^2 + (MEEF x 마스크 CDU)^2
+    # 인데 앞의 둘만 나누고 있었다. k1 이 작아지면 MEEF 가 1 을 크게 넘어
+    # 이 항이 예산을 통째로 먹는다(실측 : 피치 100 nm 에서 MEEF 4.83).
+    mask_cdu = st.slider("마스크 CDU 3σ (웨이퍼 환산) [nm]", 0.0, 6.0, 2.0, 0.5,
+                         key="k_maskcdu")
 
-cd_nm = duty * pitch
+
+# 레지스트 톤은 **마스크 극성과 따로** 정한다. negative 는 빛을 받은 쪽이
+# 남으므로 밝은 영역이 feature 이고, positive 는 그 반대다.
+tone = (RS.TONE_BRIGHT if RESIST_CHOICES[resist_label]
+        else RS.TONE_DARK)
+# 현상 뒤 남는 선의 폭. 네 조합 가운데 둘에서는 마스크 feature 가 아니라
+# 그 사이 공간이 남는다.
+cd_nm = printed_cd(duty, pitch, MASKPOL_CHOICES[mask_pol_label],
+                   RESIST_CHOICES[resist_label])
 
 # 10주차 광학 인자 묶음. st.cache_data 해시를 위해 불변 튜플로 둔다.
 optx = (polarization, source_shape, pole_offset, pole_radius,
@@ -404,6 +495,7 @@ try:
     sim_grid, mask, intensity = compute(
         pitch, duty, polarity, n_periods, dx_target,
         wavelength, na, n_medium, sigma_out, sigma_in, n_src, defocus, optx,
+        tone,
     )
 except ValueError as exc:
     st.error(str(exc))
@@ -427,7 +519,6 @@ except ValueError as exc:
 print_check = OP.printability(pitch, k1, wavelength, na)
 
 intensity_dosed = RS.apply_dose(intensity, dose)
-tone = RS.TONE_BRIGHT if polarity == "clear" else RS.TONE_DARK
 cd_result = RS.extract_cd(sim_grid.x, intensity_dosed, threshold, tone,
                           max_width=pitch)
 
@@ -484,6 +575,10 @@ st.markdown(UI.chips([
     ("임계", f"{threshold:.2f}", ""),
     ("광원", src_type, ""),
     ("마스크", mask_label, ""),
+    # 네 조합이 가능해졌으므로 **지금 어느 조합인지**가 보여야 한다.
+    # 목표 CD 가 마스크 feature 폭과 다를 수 있는 이유가 여기에 있다.
+    ("극성", "clear" if MASKPOL_CHOICES[mask_pol_label] else "dark", "-field"),
+    ("레지스트", "neg" if RESIST_CHOICES[resist_label] else "pos", ""),
 ]), unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns(4)
@@ -559,9 +654,13 @@ if nav == "공간 광강도":
     _ser = [(sim_grid.x, intensity_dosed, UI.BEAM,
              f"Δz = {defocus:.0f} nm", True)]
     if defocus != 0.0:
+        # [14주차] 여기에 optx 와 tone 이 빠져 있었다. 인자가 모자라
+        # `Defocus != 0` 인 화면이 TypeError 로 죽었다. 문법은 맞아서
+        # 컴파일도 되고, 그 화면을 그 조건으로 열어야만 드러난다.
         _, _, i_focus = compute(
             pitch, duty, polarity, n_periods, dx_target,
-            wavelength, na, n_medium, sigma_out, sigma_in, n_src, 0.0,
+            wavelength, na, n_medium, sigma_out, sigma_in, n_src, 0.0, optx,
+            tone,
         )
         # 채움을 끄고(None) 점선으로 그린다. 비교선이지 주인공이 아니다.
         _ser.append((sim_grid.x, RS.apply_dose(i_focus, dose), UI.MUTED,
@@ -625,6 +724,7 @@ if nav == "공정 윈도":
             pitch, duty, polarity, n_periods, dx_target,
             wavelength, na, n_medium, sigma_out, sigma_in, n_src,
             dz_range, n_focus, n_dose, dose_span, threshold, cd_tol, optx,
+            tone,
         )
         if res is None:
             st.error("현재 조건에서 목표 CD 를 만드는 Dose 가 없습니다. Pitch 또는 조명 조건을 완화하세요.")
@@ -654,7 +754,35 @@ if nav == "공정 윈도":
                  f"입력 {k2:.3f} 대비 {k2m - k2:+.3f}"),
                 ("공정 윈도 격자점", f"{_n_pass}", f"/ {res['pw'].size}",
                  f"통과율 {100 * _n_pass / res['pw'].size:.1f} %"),
+                ("MEEF", f"{res['meef']:.2f}", "",
+                 f"마스크 1 nm 당 웨이퍼 {res['meef']:.2f} nm"),
             ]), unsafe_allow_html=True)
+
+            # CD 예산에서 **마스크 몫을 먼저 떼고** 남는 것을 본다.
+            # 지금 두 몫 배분(SampleSpec)은 예산을 정확히 100 % 채우도록
+            # 정의돼 있어, 마스크 항을 그냥 더하면 **언제나** 초과로 나온다.
+            # 늘 뜨는 경고는 소음이다. 남는 공차를 수로 보여 주고 지금 설정과
+            # 견주게 한다. 두 몫을 나누는 방식 자체는 건드리지 않는다 --
+            # 바꾸면 11 주차부터 쌓은 데이터셋과 기준값이 흔들린다.
+            _budget = cd_tol * res["target"]
+            _mask_part = PR.mask_budget(res["meef"], mask_cdu)
+            _avail = (float(np.sqrt(max(_budget ** 2 - _mask_part ** 2, 0.0)))
+                      if np.isfinite(_mask_part) else float("nan"))
+            st.markdown(UI.chips([
+                ("CD 예산", f"{_budget:.2f}", "nm"),
+                ("마스크 몫", f"{_mask_part:.2f}", "nm"),
+                ("남는 공차", f"{_avail:.2f}", "nm"),
+                ("지금 판정 공차", f"{_budget:.2f}", "nm"),
+            ]), unsafe_allow_html=True)
+            if np.isfinite(_avail) and _avail < 0.98 * _budget:
+                st.info(
+                    f"마스크 몫을 떼면 공정 윈도에 쓸 수 있는 공차는 "
+                    f"**{_avail:.2f} nm (±{100 * _avail / res['target']:.2f} %)** "
+                    f"입니다. 지금은 ±{100 * cd_tol:.2f} % 로 판정하므로 위 "
+                    f"결과는 그만큼 **낙관적**입니다 "
+                    f"(MEEF {res['meef']:.2f} × 마스크 CDU {mask_cdu:.1f} nm "
+                    f"= {_mask_part:.2f} nm)."
+                )
 
             if d5 <= 0.0 < d5_up:
                 st.warning(
@@ -885,6 +1013,7 @@ if nav == "확률 모델":
             pitch, duty, polarity, n_periods, dx_target,
             wavelength, na, n_medium, sigma_out, sigma_in, n_src,
             dose_mj, blur_nm, threshold, y_length, n_trials, defocus, optx,
+            tone,
         )
         if sr is None:
             st.error("현재 조건에서 목표 CD 를 만드는 Dose 가 없습니다. Pitch 또는 조명 조건을 완화하세요.")

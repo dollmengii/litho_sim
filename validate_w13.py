@@ -2635,8 +2635,13 @@ chk(not _clash35, "열 묶음 이름을 다른 뜻으로 다시 쓰지 않는다
     f"겹치는 이름 {[(c, _colnm35[c], _othnm35[c]) for c in _clash35[:3]]}")
 
 # (라) 라벨 표를 두 벌로 적지 않는다. 라벨 하나만 고치면 KeyError 가 난다.
-for _nm35 in ("SRC_CHOICES", "POL_CHOICES", "MSK_CHOICES"):
-    chk(_app35.count(_nm35 + " = ") == 1,
+# 이름을 **낱말 경계**로 센다. 그냥 글자로 세면 `MASKPOL_CHOICES` 안의
+# `POL_CHOICES` 까지 걸려 "두 곳에 적었다" 고 잘못 말한다. 실제로 그랬다.
+import re as _re35
+
+for _nm35 in ("SRC_CHOICES", "POL_CHOICES", "MSK_CHOICES",
+              "MASKPOL_CHOICES", "RESIST_CHOICES"):
+    chk(len(_re35.findall(rf"(?<![A-Z_]){_nm35} = ", _app35)) == 1,
         f"{_nm35} 를 한 곳에만 적는다",
         "표가 둘이면 라벨을 고치는 날 한쪽만 남는다")
 
@@ -3032,6 +3037,25 @@ chk('POLARITY_IDLE = {"데이터셋", "식별 가능성"}' in _app41,
     "극성을 안 쓰는 화면 목록이 그대로다",
     "위 두 검사와 짝이다. 한쪽만 고치면 화면이 거짓말을 한다")
 
+# tone 은 **한 곳에서만** 정한다. 14 주차에 `cd_matrix` 만 polarity 로부터
+# 다시 유도하고 있어서, 마스크·e_op 와 **다른 tone** 으로 재는 상태가 됐다.
+# duty 0.5 에서 네 조합이 같아야 하는데 둘만 112, 둘은 2 로 나왔다.
+_n_derive41 = len([
+    n for n in _ast.walk(_ast.parse(_app41))
+    if isinstance(n, _ast.IfExp)
+    and "TONE_BRIGHT" in _ast.unparse(n) and "TONE_DARK" in _ast.unparse(n)
+])
+chk(_n_derive41 == 1,
+    "tone 을 고르는 자리가 앱에 한 곳뿐이다",
+    f"{_n_derive41} 곳 — 두 곳이면 서로 다른 tone 으로 재게 된다")
+
+# 네 조합이 전부 만들어질 수 있어야 한다 (2x2).
+for _nm41 in ("MASKPOL_CHOICES", "RESIST_CHOICES"):
+    chk(_app41.count(_nm41) >= 2, f"{_nm41} 가 쓰이고 있다")
+chk("def mask_desc(" in _app41 and "def printed_cd(" in _app41,
+    "남는 선을 가운데로 옮겨 기술하는 도우미가 있다",
+    "없으면 네 조합 가운데 둘에서 측정이 아예 안 된다")
+
 # 말이 아니라 **돌려서** 잰다. 어두운 선도 잡혀야 하고, 결정론과 맞아야 한다.
 _g41 = _G41.build_grid(pitch=160.0, n_periods=6, dx_target=0.5)
 for _tone41, _pol41 in ((_RS41.TONE_BRIGHT, "clear"), (_RS41.TONE_DARK, "dark")):
@@ -3050,6 +3074,106 @@ for _tone41, _pol41 in ((_RS41.TONE_BRIGHT, "clear"), (_RS41.TONE_DARK, "dark"))
             f"{_pol41} 의 확률 CD 가 결정론 CD 와 맞는다",
             f"확률 {_mcr41['cd_mean']:.2f} vs 결정론 {_det41:.2f} nm")
 
+
+# ---------------------------------------------------------------------------
+head(42, "앱 안에서 부르는 함수에 인자가 모자라지 않는가")
+
+# 왜 이 사례가 필요한가 : `공간 광강도` 화면의 `compute(...)` 호출에 인자가
+# **하나 빠져 있었다.** 그래서 Defocus 를 0 이 아닌 값으로 두면 그 화면이
+# TypeError 로 죽었다. 문법은 맞아서 컴파일도 되고, 그 화면을 그 조건으로
+# 열어야만 드러난다 -- 이 환경에서는 앱을 못 띄우므로 끝까지 안 보였을 것이다.
+# 38 번(정의 전에 쓰기)과 같은 부류다 : 돌려 봐야만 나오는 것을 구조로 잡는다.
+import ast as _ast42
+
+_t42 = _ast42.parse(open("app.py", encoding="utf-8").read())
+_defs42 = {n.name: n for n in _t42.body if isinstance(n, _ast42.FunctionDef)}
+chk(len(_defs42) >= 5, "앱 안의 함수를 찾아냈다", f"{len(_defs42)} 개")
+
+_bad42, _seen42 = [], 0
+for _n42 in _ast42.walk(_t42):
+    if not (isinstance(_n42, _ast42.Call)
+            and isinstance(_n42.func, _ast42.Name)):
+        continue
+    _fn42 = _defs42.get(_n42.func.id)
+    if _fn42 is None:
+        continue
+    _seen42 += 1
+    _names42 = [a.arg for a in _fn42.args.args]
+    _req42 = len(_names42) - len(_fn42.args.defaults)
+    _given42 = len(_n42.args) + len({k.arg for k in _n42.keywords if k.arg})
+    _over42 = len(_n42.args) > len(_names42) and _fn42.args.vararg is None
+    if _given42 < _req42 or _over42:
+        _bad42.append((_n42.lineno, _n42.func.id, _given42, _req42))
+chk(_seen42 >= 10, "검사가 실제로 호출을 세고 있다", f"{_seen42} 곳")
+chk(not _bad42, "모든 호출에 인자가 맞는다",
+    f"app.py {_bad42[:3]} — 그 화면을 열 때 TypeError 로 죽는다")
+
+
+# ---------------------------------------------------------------------------
+head(43, "마스크 오차 증폭(MEEF)이 CD 예산에 들어 있는가")
+
+# 왜 이 사례가 필요한가 : 14 주차 전까지 CD 예산은 **공정 윈도와 확률 변동
+# 둘로만** 나뉘어 있었다. 현장에서 쓰는 예산은
+#     CD 예산^2 = 공정윈도^2 + 확률변동^2 + (MEEF x 마스크 CDU)^2 + ...
+# 이고, 셋째 항이 빠지면 예산이 낙관적으로 나온다. 실측하면 피치 100 nm 에서
+# MEEF 가 4.83 이라 마스크 CDU 2 nm 만으로도 9.66 nm 를 먹는다. 목표 50 nm
+# 의 7.07 % 예산(3.54 nm)을 혼자 넘긴다.
+import inspect as _insp43
+
+from litho import process as _PR43
+from litho import resist as _RS43
+
+chk(hasattr(_PR43, "meef"), "MEEF 를 재는 함수가 있다")
+chk(hasattr(_PR43, "mask_budget"), "마스크 몫을 내는 함수가 있다")
+
+# (가) 정의대로 재는가 : 노광량을 **고정**해야 한다. 마스크마다 dose-to-size
+# 를 다시 잡으면 정의상 CD 가 목표로 돌아가 MEEF 가 늘 1 근처로 나온다.
+_src43 = _insp43.getsource(_PR43.meef)
+chk("dose" in _insp43.signature(_PR43.meef).parameters,
+    "MEEF 가 노광량을 인자로 받는다 (고정해 재려고)")
+chk("dose_to_size" not in _src43,
+    "MEEF 안에서 dose 를 다시 잡지 않는다",
+    "다시 잡으면 마스크 오차가 아니라 보정 능력을 재게 된다")
+
+# (나) 실제로 돌려서 잰다. k1 이 작아지면 MEEF 가 커져야 한다.
+def _meef_at43(pitch: float) -> float:
+    g = _G41.build_grid(pitch=pitch, n_periods=6, dx_target=0.25)
+    cd0 = 0.5 * pitch
+    ims = []
+    for dw in (-2.0, +2.0):
+        mm = _MK41.line_space(g, cd=cd0 + dw, polarity="clear")
+        ims.append(_IM41.aerial_image(g, mm, 193.0, 1.35, n_medium=1.44,
+                                      sigma_out=0.70, sigma_in=0.0,
+                                      defocus=0.0, n_source_grid=21))
+    m0 = _MK41.line_space(g, cd=cd0, polarity="clear")
+    i0 = _IM41.aerial_image(g, m0, 193.0, 1.35, n_medium=1.44, sigma_out=0.70,
+                            sigma_in=0.0, defocus=0.0, n_source_grid=21)
+    d0 = _PR43.dose_to_size(g, i0, cd0, 0.30, _RS43.TONE_BRIGHT,
+                            max_width=pitch)
+    return _PR43.meef(g, ims[0], ims[1], cd0 - 2.0, cd0 + 2.0, 0.30,
+                      _RS43.TONE_BRIGHT, dose=float(d0), max_width=pitch)
+
+
+_m_big43 = _meef_at43(400.0)    # k1 이 큼 : 거의 1
+_m_small43 = _meef_at43(100.0)  # k1 이 작음 : 1 을 크게 넘음
+chk(0.8 < _m_big43 < 1.2, "여유로운 피치에서 MEEF 가 1 근처다",
+    f"{_m_big43:.3f}")
+chk(_m_small43 > 2.0, "빠듯한 피치에서 MEEF 가 1 을 크게 넘는다",
+    f"{_m_small43:.3f} — 1 근처로 나오면 노광량을 다시 잡고 있다는 뜻이다")
+chk(_m_small43 > _m_big43, "k1 이 작아질수록 MEEF 가 커진다",
+    f"{_m_big43:.3f} -> {_m_small43:.3f}")
+
+# (다) 예산 항이 제곱합으로 들어가는가.
+chk(abs(_PR43.mask_budget(4.0, 2.0) - 8.0) < 1e-9, "마스크 몫 = MEEF x CDU")
+chk(_PR43.mask_budget(1.0, 0.0) == 0.0, "마스크 CDU 0 이면 몫도 0")
+
+# (라) 앱이 재서 보여 주는가.
+_app43 = open("app.py", encoding="utf-8").read()
+chk("PR.meef(" in _app43, "앱이 MEEF 를 잰다")
+chk("mask_cdu" in _app43, "앱이 마스크 CDU 를 입력받는다")
+chk("PR.mask_budget(" in _app43, "앱이 마스크 몫을 예산에 넣는다")
+chk('"meef"' in _app43, "스윕 결과에 MEEF 가 담긴다")
+
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
 # 합계를 낸다. 이 줄의 형식을 바꾸면 합계에 **0 으로** 들어가고, 문서에 적힌
@@ -3067,10 +3191,10 @@ print("""
    해석      Case 3, 5, 8, 9, 10, 12, 14, 15, 16, 18 — 측정 자체가 뜻을
              갖는 조건.
              음성 대조가 있다.
-   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41 — 코드가 지켜야 하는 관계.
+   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43 — 코드가 지켜야 하는 관계.
              Case 24 는 모형 파일 없이 번들을 손으로 만들어 관문을 잰다.\n             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
              꼴과의 **정확** 대조다(시뮬레이션이 아니다).
-   -> 41 개 가운데 39 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
+   -> 43 개 가운데 40 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
       틀린 적이 없다. 35 번은 110 번과 **같은 종류의 이음매**(앱과 추천기가
       같은 이름을 서로 다르게 적는 것)를, 37 번 (나) 는 화면을 옮길 때 조건이
       말없이 사라지는 것을 막으려고 넣었다. 추측으로 넣은

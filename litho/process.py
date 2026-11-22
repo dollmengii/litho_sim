@@ -530,6 +530,70 @@ def dose_to_size(
     return float("nan")  # 목표 CD 가 구현 가능 범위 밖
 
 
+def meef(
+    grid,
+    intensity_minus: np.ndarray,
+    intensity_plus: np.ndarray,
+    cd_mask_minus: float,
+    cd_mask_plus: float,
+    threshold: float,
+    tone: str = RS.TONE_BRIGHT,
+    dose: float = 1.0,
+    max_width: float | None = None,
+) -> float:
+    """MEEF (Mask Error Enhancement Factor).
+
+        MEEF = d(웨이퍼 CD) / d(마스크 CD, 웨이퍼 환산)
+
+    마스크 CD 가 1 nm 틀렸을 때 웨이퍼 CD 가 몇 nm 틀어지는지를 나타낸다.
+    k1 이 작아질수록 1 을 크게 넘어서고, 그만큼 **마스크 오차가 증폭**된다.
+
+    [단위] 두 CD 모두 **웨이퍼 환산** 값이다. 4x 축소 레티클의 실제 마스크
+    치수로 말하려면 마스크 쪽을 4 로 나눈 값을 넣어야 하며, 그렇게 정의한
+    MEEF 가 업계에서 쓰는 값이다. 여기서는 축소배율을 모형에 넣지 않았으므로
+    둘 다 웨이퍼 환산으로 두고, 배율 환산은 쓰는 쪽에 맡긴다.
+
+    [왜 중앙차분인가] 한쪽 차분은 Bossung 곡률 때문에 기울기를 한쪽으로
+    치우쳐 읽는다. 두 점을 대칭으로 두면 그 1 차 항이 상쇄된다.
+
+    [노광량 고정] 두 상에 **같은 dose** 를 써야 한다. 마스크를 바꿀 때마다
+    dose-to-size 를 다시 잡으면 정의상 CD 가 목표로 되돌아가 MEEF 가 늘
+    1 근처로 나온다. 그것은 마스크 오차가 아니라 보정 능력을 재는 것이다.
+
+    두 CD 가운데 하나라도 못 재면 nan 을 돌려준다.
+    """
+    if cd_mask_plus <= cd_mask_minus:
+        raise ValueError("cd_mask_plus 가 cd_mask_minus 보다 커야 합니다.")
+    r_m = RS.extract_cd(grid.x, intensity_minus * dose, threshold, tone,
+                        max_width=max_width)
+    r_p = RS.extract_cd(grid.x, intensity_plus * dose, threshold, tone,
+                        max_width=max_width)
+    if not (r_m["formed"] and r_p["formed"]):
+        return float("nan")
+    if not (np.isfinite(r_m["cd"]) and np.isfinite(r_p["cd"])):
+        return float("nan")
+    return float((r_p["cd"] - r_m["cd"]) / (cd_mask_plus - cd_mask_minus))
+
+
+def mask_budget(meef_value: float, mask_cdu_nm: float) -> float:
+    """마스크 CDU 가 웨이퍼 CD 예산에서 차지하는 몫 [nm].
+
+    업계에서 CD 예산은 독립 기여의 제곱합으로 나눈다.
+
+        CD 예산^2 = 공정윈도^2 + 확률변동^2 + (MEEF x 마스크 CDU)^2 + ...
+
+    이 함수는 그 셋째 항을 돌려준다. 나머지 두 항은 `dataset.SampleSpec`
+    이 이미 나누고 있으며, 그 배분은 **바꾸지 않는다** -- 바꾸면 11 주차부터
+    쌓아 온 데이터셋·기준값이 전부 흔들린다. 여기서는 빠져 있던 항을
+    따로 보여 주고, 셋을 합치면 예산을 넘는지를 사용자가 보게 한다.
+    """
+    if mask_cdu_nm < 0.0:
+        raise ValueError("마스크 CDU 는 0 이상이어야 합니다.")
+    if not np.isfinite(meef_value):
+        return float("nan")
+    return float(abs(meef_value) * mask_cdu_nm)
+
+
 def window_saturated(pw: np.ndarray) -> dict:
     """공정 윈도가 스윕 경계에 닿았는지 검사한다 (DOF/EL 과소·포화 판정)."""
     return {
