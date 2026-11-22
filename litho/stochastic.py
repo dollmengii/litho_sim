@@ -151,6 +151,7 @@ def edge_positions(
     threshold: float,
     side: str = "right",
     interp: str = "spectral",
+    tone: str = RS.TONE_BRIGHT,
 ) -> np.ndarray:
     """각 y 행마다 필드 중앙 feature 의 좌/우 경계 위치를 구한다.
 
@@ -159,6 +160,18 @@ def edge_positions(
     "spectral" : 선형보간 해를 출발점으로 대역제한 보간에서 조인다.
         결정론 경로(resist.extract_cd)와 같은 방식이다. 기본값.
     "linear"   : 9주차까지의 선형보간. 비교용으로 남겨 둔다.
+
+    tone
+    ----
+    재려는 것이 **밝은 선**(bright)인지 **어두운 선**(dark)인지. 결정론
+    경로 `resist.extract_cd` 가 이미 받는 것과 같은 뜻이고, 같은 한 줄로
+    처리한다.
+
+    [14주차] 이것이 없어서 격자 한가운데가 임계 아래인 경우 -- 즉 극성이
+    dark 인 경우 -- 모든 행이 `g[ic] <= 0` 에서 건너뛰어져 **늘 미형성**으로
+    나왔다. 같은 조건에서 결정론 경로는 CD 80.00 nm 로 멀쩡히 쟀다. 두
+    경로가 같은 양을 재야 하는데 한쪽만 못 재고 있었다. 기본값은 bright 라
+    기존 호출은 하나도 달라지지 않는다.
 
     왜 통일해야 하는가
     ------------------
@@ -175,8 +188,10 @@ def edge_positions(
     out = np.full(n_rows, np.nan)
     dx = float(x[1] - x[0])
 
+    # 결정론 경로와 **같은 한 줄**이다 (resist.extract_cd).
+    _dark = tone != RS.TONE_BRIGHT
     for r in range(n_rows):
-        g = field_2d[r] - threshold
+        g = threshold - field_2d[r] if _dark else field_2d[r] - threshold
         if g[ic] <= 0:
             continue
         i = ic
@@ -208,6 +223,7 @@ def monte_carlo(
     dy: float | None = None,
     max_width: float | None = None,
     interp: str = "spectral",
+    tone: str = RS.TONE_BRIGHT,
 ) -> dict:
     """확률적 CD, LER, 결함률을 산출한다.
 
@@ -243,8 +259,10 @@ def monte_carlo(
             intensity_1d, dx, dose_mj_cm2, wavelength,
             n_rows=n_rows, dy=dy, blur_nm=blur_nm, rng=rng,
         )
-        left = edge_positions(x, field, threshold, "left", interp=interp)
-        right = edge_positions(x, field, threshold, "right", interp=interp)
+        left = edge_positions(x, field, threshold, "left", interp=interp,
+                              tone=tone)
+        right = edge_positions(x, field, threshold, "right", interp=interp,
+                               tone=tone)
         ok = np.isfinite(left) & np.isfinite(right)
 
         n_total += n_rows

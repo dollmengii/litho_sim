@@ -200,9 +200,11 @@ def stochastic_run(
     field = ST.stochastic_field(In, g.dx, dose_mj, wavelength,
                                 n_rows=n_show, dy=dy, blur_nm=blur_nm,
                                 rng=np.random.default_rng(0))
+    # tone 을 넘긴다. 안 넘기면 극성이 dark 일 때 확률 경로만 늘 '미형성'
+    # 으로 나온다(결정론 경로는 같은 조건에서 CD 를 제대로 잰다).
     mc = ST.monte_carlo(g.x, In, g.dx, dose_mj, wavelength, threshold,
                         n_rows=n_rows, blur_nm=blur_nm, n_trials=n_trials,
-                        seed=1, dy=dy, max_width=pitch)
+                        seed=1, dy=dy, max_width=pitch, tone=tone_)
     return {"g": g, "I_det": In, "field": field, "mc": mc, "e_op": e_op,
             "tone": tone_, "dy": dy, "n_rows": n_rows}
 
@@ -945,7 +947,8 @@ if nav == "확률 모델":
                     r_ = ST.monte_carlo(gg.x, sr["I_det"], gg.dx, float(d_), wavelength,
                                         threshold, n_rows=sr["n_rows"],
                                         blur_nm=blur_nm, n_trials=4, seed=2,
-                                        dy=sr["dy"], max_width=pitch)
+                                        dy=sr["dy"], max_width=pitch,
+                                        tone=sr["tone"])
                     lers.append(r_["ler_3sigma"] if r_["formed"] else np.nan)
                 axd.plot(doses_scan, lers, "o-", lw=1.4, ms=4)
                 axd.axvline(dose_mj, color="crimson", ls=":", lw=1.0)

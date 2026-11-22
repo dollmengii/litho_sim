@@ -2939,6 +2939,63 @@ chk(not _os40.path.exists("requirements-app.txt"),
     "scikit-learn 을 뺀 배포용 목록을 두지 않는다",
     "그 목록으로 올리면 조건 추천과 내려받기가 조용히 죽는다")
 
+
+# ---------------------------------------------------------------------------
+head(41, "확률 경로가 결정론 경로와 같은 tone 으로 재는가")
+
+# 왜 이 사례가 필요한가 : `edge_positions` 는 격자 한가운데가 임계 **위**에
+# 있다고 가정하고 `g[ic] <= 0` 이면 그 행을 건너뛴다. 극성이 dark 이면 한
+# 가운데가 임계 아래라 **모든 행이 건너뛰어져 늘 '미형성'** 이 나왔다.
+# 같은 조건에서 결정론 경로(`resist.extract_cd`)는 CD 80.00 nm 로 멀쩡히
+# 쟀다. 두 경로가 같은 양을 재야 하는데 한쪽만 못 재고 있었던 것이다.
+# 10 주차에 보간 방식을 통일한 것과 같은 구멍이고, 그때는 보간이, 이번에는
+# tone 이 빠져 있었다.
+#
+# 데이터셋 생성은 polarity 기본값(clear)만 쓰므로 **보고서 숫자는 영향이
+# 없다.** 영향 범위는 앱에서 극성을 dark 로 바꾼 경우뿐이다.
+import inspect as _insp41
+
+from litho import grid as _G41
+from litho import imaging as _IM41
+from litho import mask as _MK41
+from litho import resist as _RS41
+from litho import stochastic as _ST41
+
+for _fn41 in (_ST41.edge_positions, _ST41.monte_carlo):
+    _par41 = _insp41.signature(_fn41).parameters
+    chk("tone" in _par41, f"{_fn41.__name__} 이 tone 을 받는다")
+    chk(_par41["tone"].default == _RS41.TONE_BRIGHT,
+        f"{_fn41.__name__} 의 tone 기본값이 bright 다 (기존 호출이 안 바뀐다)",
+        f"{_par41['tone'].default}")
+
+_app41 = open("app.py", encoding="utf-8").read()
+_mc41 = [n for n in _ast.walk(_ast.parse(_app41))
+         if isinstance(n, _ast.Call)
+         and getattr(n.func, "attr", "") == "monte_carlo"]
+chk(len(_mc41) >= 2, "앱이 monte_carlo 를 부르는 곳을 찾았다", f"{len(_mc41)} 곳")
+_notone41 = [n.lineno for n in _mc41
+             if not any(k.arg == "tone" for k in n.keywords)]
+chk(not _notone41, "앱의 모든 monte_carlo 호출이 tone 을 넘긴다",
+    f"app.py {_notone41} 줄 — 그 자리에서 dark 가 늘 미형성이 된다")
+
+# 말이 아니라 **돌려서** 잰다. 어두운 선도 잡혀야 하고, 결정론과 맞아야 한다.
+_g41 = _G41.build_grid(pitch=160.0, n_periods=6, dx_target=0.5)
+for _tone41, _pol41 in ((_RS41.TONE_BRIGHT, "clear"), (_RS41.TONE_DARK, "dark")):
+    _m41 = _MK41.line_space(_g41, cd=80.0, polarity=_pol41)
+    _I41 = _IM41.aerial_image(_g41, _m41, 193.0, 1.35, n_medium=1.44,
+                           sigma_out=0.70, sigma_in=0.0, defocus=0.0,
+                           n_source_grid=21)
+    _det41 = _RS41.extract_cd(_g41.x, _I41, 0.30, _tone41)["cd"]
+    _mcr41 = _ST41.monte_carlo(_g41.x, _I41, _g41.dx, 30.0, 193.0, 0.30,
+                               n_rows=64, blur_nm=8.0, n_trials=2, seed=1,
+                               dy=2.67, max_width=160.0, tone=_tone41)
+    chk(_mcr41["formed"], f"{_pol41} 에서 확률 경로가 패턴을 잡는다",
+        "결정론은 잡는데 확률만 못 잡으면 같은 양을 두 가지로 재는 것이다")
+    if _mcr41["formed"]:
+        chk(abs(_mcr41["cd_mean"] - _det41) < 3.0,
+            f"{_pol41} 의 확률 CD 가 결정론 CD 와 맞는다",
+            f"확률 {_mcr41['cd_mean']:.2f} vs 결정론 {_det41:.2f} nm")
+
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
 # 합계를 낸다. 이 줄의 형식을 바꾸면 합계에 **0 으로** 들어가고, 문서에 적힌
@@ -2956,10 +3013,10 @@ print("""
    해석      Case 3, 5, 8, 9, 10, 12, 14, 15, 16, 18 — 측정 자체가 뜻을
              갖는 조건.
              음성 대조가 있다.
-   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 — 코드가 지켜야 하는 관계.
+   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41 — 코드가 지켜야 하는 관계.
              Case 24 는 모형 파일 없이 번들을 손으로 만들어 관문을 잰다.\n             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
              꼴과의 **정확** 대조다(시뮬레이션이 아니다).
-   -> 40 개 가운데 38 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
+   -> 41 개 가운데 39 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
       틀린 적이 없다. 35 번은 110 번과 **같은 종류의 이음매**(앱과 추천기가
       같은 이름을 서로 다르게 적는 것)를, 37 번 (나) 는 화면을 옮길 때 조건이
       말없이 사라지는 것을 막으려고 넣었다. 추측으로 넣은
