@@ -322,7 +322,17 @@ with _grp("수차 · 플레어 · 스캔 (10주차)"):
                    "LER 에서는 구별됨.")
 
 with _grp("마스크 패턴"):
-    polarity = st.radio("극성", ["clear", "dark"], horizontal=True)
+    # [14주차] `데이터셋` 과 `식별 가능성` 은 극성을 **쓰지 않는다.**
+    # SampleSpec·IdentifySpec 에 극성 칸이 아예 없어, 안에서 line_space 의
+    # 기본값(clear)으로 만든다. 그 두 화면에서 극성을 dark 로 두면 화면은
+    # dark 라고 말하면서 clear 로 계산하는 꼴이 된다. 글로 적는 대신
+    # 손잡이를 꺼서 알린다 (NA·σ 와 같은 방식).
+    POLARITY_IDLE = {"데이터셋", "식별 가능성"}
+    _pol_idle = nav in POLARITY_IDLE
+    polarity = st.radio("극성", ["clear", "dark"], horizontal=True,
+                        key="k_polarity", disabled=_pol_idle,
+                        help=("이 화면은 극성을 쓰지 않습니다 (언제나 clear "
+                              "로 계산합니다).") if _pol_idle else None)
     mask_label = st.radio("마스크 종류", list(MSK_CHOICES), horizontal=True)
     mask_type = MSK_CHOICES[mask_label][CONST]
     att_t = (st.slider("att-PSM 투과율", 0.03, 0.20, 0.06, 0.01)
@@ -919,7 +929,12 @@ if nav == "확률 모델":
                           extent=[0, gg.field_width, 0, gg.field_width / 6])
             axs[0].set_ylabel("y [nm]")
             axs[0].set_title("결정론 (CTR)", fontsize=9)
-            sto2d = (sr["field"] >= threshold).astype(float)
+            # [14주차] 여기도 tone 을 거쳐야 한다. 날것으로 자르면 극성이
+            # dark 일 때 위 결정론 그림과 **정확히 반대**로 나온다. 하필
+            # 두 그림을 나란히 놓고 견주는 자리라 바로 눈에 띈다.
+            # bright 일 때는 resist_profile 이 `>= threshold` 와 같으므로
+            # 지금까지의 그림은 달라지지 않는다.
+            sto2d = RS.resist_profile(sr["field"], threshold, sr["tone"])
             axs[1].imshow(sto2d, cmap="gray", aspect="auto",
                           extent=[0, gg.field_width, 0, gg.field_width / 6])
             axs[1].set_xlabel("x [nm]")

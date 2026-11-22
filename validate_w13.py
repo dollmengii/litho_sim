@@ -2753,13 +2753,17 @@ chk(_src37.count("st.expander(") >= 2,
 # 그러면 사용자가 맞춰 둔 조건이 말없이 사라진다.
 _varying37 = []
 for _n in _ast37.walk(_app37):
+    # 슬라이더만 보면 라디오·선택상자를 놓친다. 값이 처음으로 돌아가는
+    # 위험은 손잡이 종류와 무관하다 (14 주차에 극성 라디오가 그랬다).
     if not (isinstance(_n, _ast37.Call)
-            and getattr(_n.func, "attr", "") == "slider"):
+            and getattr(_n.func, "attr", "")
+            in ("slider", "select_slider", "radio", "selectbox", "checkbox",
+                "number_input", "text_input")):
         continue
     _kw = {k.arg for k in _n.keywords}
     if ({"disabled", "help"} & _kw) and "key" not in _kw:
         _varying37.append(_n.lineno)
-chk(not _varying37, "화면마다 모습이 바뀌는 슬라이더에는 고정 키가 있다",
+chk(not _varying37, "화면마다 모습이 바뀌는 손잡이에는 고정 키가 있다",
     f"app.py {_varying37[:3]} 줄 — 화면을 옮기면 값이 돌아갈 수 있다")
 
 # 조건 슬라이더 넷은 모두 키를 가진다. 값이 사라지면 가장 아픈 자리다.
@@ -2968,7 +2972,40 @@ for _fn41 in (_ST41.edge_positions, _ST41.monte_carlo):
         f"{_fn41.__name__} 의 tone 기본값이 bright 다 (기존 호출이 안 바뀐다)",
         f"{_par41['tone'].default}")
 
+# 같은 원인이 **두 곳**이었다. 하나는 monte_carlo 호출, 하나는 '결정론 대
+# 확률' 비교 그림이다. 그림 쪽은 `(field >= threshold)` 로 손수 잘라서,
+# 극성이 dark 일 때 두 그림이 정확히 반대로 나왔다. 하필 나란히 놓고 견주는
+# 자리다. 그래서 '0/1 현상 지도를 손으로 만들지 않는다' 를 규칙으로 둔다.
 _app41 = open("app.py", encoding="utf-8").read()
+_tree41 = _ast.parse(_app41)
+
+_hand41 = []
+for _n41 in _ast.walk(_tree41):
+    if not isinstance(_n41, _ast.Compare):
+        continue
+    if not any(isinstance(o, (_ast.Gt, _ast.GtE, _ast.Lt, _ast.LtE))
+               for o in _n41.ops):
+        continue
+    if not any(isinstance(c, _ast.Name) and c.id == "threshold"
+               for c in _n41.comparators):
+        continue
+    # 0/1 지도로 쓰는 것만 문제다 : `.astype(...)` 이 붙은 비교.
+    for _p41 in _ast.walk(_tree41):
+        if (isinstance(_p41, _ast.Attribute) and _p41.attr == "astype"
+                and _p41.value is _n41):
+            _hand41.append(_n41.lineno)
+chk(not _hand41, "현상 지도를 손으로 자르지 않는다 (resist_profile 을 쓴다)",
+    f"app.py {_hand41} 줄 — tone 을 건너뛰어 극성이 뒤집힌다")
+
+_rp41 = [n for n in _ast.walk(_tree41)
+         if isinstance(n, _ast.Call)
+         and getattr(n.func, "attr", "") == "resist_profile"]
+chk(len(_rp41) >= 2, "앱이 resist_profile 을 쓰고 있다", f"{len(_rp41)} 곳")
+_notone41b = [n.lineno for n in _rp41
+              if len(n.args) < 3 and not any(k.arg == "tone" for k in n.keywords)]
+chk(not _notone41b, "모든 resist_profile 호출이 tone 을 넘긴다",
+    f"app.py {_notone41b} 줄")
+
 _mc41 = [n for n in _ast.walk(_ast.parse(_app41))
          if isinstance(n, _ast.Call)
          and getattr(n.func, "attr", "") == "monte_carlo"]
@@ -2977,6 +3014,23 @@ _notone41 = [n.lineno for n in _mc41
              if not any(k.arg == "tone" for k in n.keywords)]
 chk(not _notone41, "앱의 모든 monte_carlo 호출이 tone 을 넘긴다",
     f"app.py {_notone41} 줄 — 그 자리에서 dark 가 늘 미형성이 된다")
+
+# 극성을 **쓰지 않는** 화면에서는 그 손잡이를 꺼 둔다. 그런데 그 근거가
+# 사실이어야 한다 : SampleSpec·IdentifySpec 에 극성 칸이 없다는 것. 나중에
+# 그 칸이 생기면 꺼 두는 것이 틀린 처사가 되므로, 여기서 다시 보게 만든다.
+import dataclasses as _dc41
+
+from litho import dataset as _DD41
+from litho import identify as _ID41
+
+for _C41 in (_DD41.SampleSpec, _ID41.IdentifySpec):
+    _f41 = {f.name for f in _dc41.fields(_C41)}
+    chk(not (_f41 & {"polarity", "tone"}),
+        f"{_C41.__name__} 에 극성 칸이 없다 (그래서 그 화면에서 손잡이를 끈다)",
+        "칸이 생겼으면 앱에서 넘기고 POLARITY_IDLE 에서 빼야 한다")
+chk('POLARITY_IDLE = {"데이터셋", "식별 가능성"}' in _app41,
+    "극성을 안 쓰는 화면 목록이 그대로다",
+    "위 두 검사와 짝이다. 한쪽만 고치면 화면이 거짓말을 한다")
 
 # 말이 아니라 **돌려서** 잰다. 어두운 선도 잡혀야 하고, 결정론과 맞아야 한다.
 _g41 = _G41.build_grid(pitch=160.0, n_periods=6, dx_target=0.5)
