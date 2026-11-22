@@ -1000,8 +1000,16 @@ _dom17 = {
     },
 }
 _sum17 = TS.domain_for_json(_dom17)
-_txt17 = _json.dumps({"training_domain": _sum17}, ensure_ascii=False, indent=2)
-chk(True, "요약판이 예외 없이 JSON 으로 직렬화된다")
+# 직렬화를 **검사 안에서** 한다. 밖에서 하면 실패했을 때 이 스크립트가
+# 통째로 죽어 버려, 어느 검사가 왜 실패했는지가 안 남는다. 그리고 `chk(True)`
+# 는 그 자체로는 아무것도 재지 않는다 -- 늘 참인 검사를 두지 않는다.
+try:
+    _txt17 = _json.dumps({"training_domain": _sum17},
+                         ensure_ascii=False, indent=2)
+    _ser17 = ""
+except (TypeError, ValueError) as _e17:
+    _txt17, _ser17 = "", f"{type(_e17).__name__}: {_e17}"
+chk(not _ser17, "요약판이 예외 없이 JSON 으로 직렬화된다", _ser17)
 chk(_txt17.count("\n") < 200,
     "보고서가 사람이 읽을 크기다 (요약 전이면 수만 줄)",
     f"{_txt17.count(chr(10))} 줄")
@@ -2792,6 +2800,145 @@ chk("k2_used" in _app38 and "k3_used" in _app38,
     "두 DOF 의 계수를 화면에 띄운다",
     "DOF 가 두 개 떠 있는데 왜 다른지 알 길이 없어진다")
 
+
+# ---------------------------------------------------------------------------
+head(39, "있을 때만 있는 사전 열쇠를 조건 없이 꺼내지 않는가")
+
+# 왜 이 사례가 필요한가 : `stochastic.monte_carlo` 는 **형성됐을 때만**
+# y_length_nm · n_samples · dy 를 돌려준다. 미형성이면 그 열쇠가 아예 없다.
+# 그런데 화면은 바로 위 줄에서 '미형성' 을 띄워 놓고 다음 줄에서 그 열쇠를
+# 조건 없이 꺼냈다. 즉 **패턴이 안 잡히는 조건에서 확률 모델 화면이
+# KeyError 로 죽었다.** 7 주차부터 있던 자리이고, 14 주차 전면 점검에서야
+# 나왔다. 102 번(KeyError 로 흰 화면)과 같은 부류다.
+import ast as _ast39
+import inspect as _insp39
+
+from litho import stochastic as _ST39
+
+# (가) 어느 열쇠가 '있을 때만' 있는지 **코드에서 읽는다.** 손으로 적으면
+# 모듈이 바뀌는 날 이 목록만 남는다.
+_mcsrc39 = _insp39.getsource(_ST39.monte_carlo)
+_rets39 = [n for n in _ast39.walk(_ast39.parse(_mcsrc39.lstrip()))
+           if isinstance(n, _ast39.Return)
+           and isinstance(n.value, _ast39.Dict)]
+chk(len(_rets39) >= 2, "monte_carlo 의 돌려주는 길이 둘 이상이다",
+    f"{len(_rets39)} 개 — 하나뿐이면 이 사례의 전제가 깨진다")
+_keysets39 = [
+    {k.value for k in r.value.keys
+     if isinstance(k, _ast39.Constant) and isinstance(k.value, str)}
+    for r in _rets39
+]
+_always39 = set.intersection(*_keysets39)
+_sometimes39 = set.union(*_keysets39) - _always39
+chk(_sometimes39, "길에 따라 빠지는 열쇠가 실제로 있다", f"{sorted(_sometimes39)}")
+chk("formed" in _always39, "formed 는 어느 길에서나 있다 (판가름할 수 있다)")
+
+# (나) 화면이 그 열쇠를 꺼낼 때는 formed 로 가려야 한다.
+_appsrc39 = open("app.py", encoding="utf-8").read()
+_apptree39 = _ast39.parse(_appsrc39)
+_par39 = {}
+for _n in _ast39.walk(_apptree39):
+    for _c in _ast39.iter_child_nodes(_n):
+        _par39[_c] = _n
+
+
+def _guarded39(node) -> bool:
+    """위로 올라가며 formed 로 가려졌는지 본다."""
+    cur = node
+    while cur in _par39:
+        p = _par39[cur]
+        if isinstance(p, _ast39.IfExp) and "formed" in _ast39.unparse(p.test):
+            return True
+        if isinstance(p, _ast39.If) and "formed" in _ast39.unparse(p.test) \
+                and any(cur is x or cur in list(_ast39.walk(x)) for x in p.body):
+            return True
+        cur = p
+    return False
+
+
+_naked39 = []
+for _n in _ast39.walk(_apptree39):
+    if (isinstance(_n, _ast39.Subscript)
+            and isinstance(_n.value, _ast39.Name) and _n.value.id == "mc"
+            and isinstance(_n.slice, _ast39.Constant)
+            and _n.slice.value in _sometimes39
+            and not _guarded39(_n)):
+        _naked39.append((_n.lineno, _n.slice.value))
+chk(not _naked39, "형성됐을 때만 있는 열쇠를 가리고 꺼낸다",
+    f"app.py {_naked39[:3]} — 미형성 조건에서 화면이 죽는다")
+
+# (다) 검출력 : 가려야 하는 자리가 실제로 코드에 있어야 한다.
+_touch39 = [n.slice.value for n in _ast39.walk(_apptree39)
+            if isinstance(n, _ast39.Subscript)
+            and isinstance(n.value, _ast39.Name) and n.value.id == "mc"
+            and isinstance(n.slice, _ast39.Constant)
+            and n.slice.value in _sometimes39]
+chk(len(_touch39) >= 1, "화면이 그 열쇠들을 실제로 꺼내 쓰고 있다",
+    f"{len(_touch39)} 곳 — 0 이면 (나) 가 공집합을 통과한다")
+
+
+# ---------------------------------------------------------------------------
+head(40, "앱이 닿는 꾸러미가 모두 requirements 에 적혀 있는가")
+
+# 왜 이 사례가 필요한가 : 14 주차 전면 점검에서 **배포가 깨질 자리**가 나왔다.
+# `requirements-app.txt` 는 "시뮬레이터 본체는 scikit-learn 을 쓰지 않는다"
+# 는 전제로 그 둘을 빼 둔 가벼운 목록이었다. 그런데 같은 주에 '조건 추천'
+# 화면이 생기면서 **앱이 recommend.py 를 부르게** 되었고, 내려받기는
+# openpyxl·reportlab 을 쓴다. 그 목록으로 올렸으면 두 기능이 조용히 죽었다.
+# 배포 문서는 그 목록을 가리키고 있었다. 목록을 지우고 이 검사를 둔다.
+import ast as _ast40
+import sys as _sys40
+
+# 주석을 걷고 **줄 맨 앞의 이름**만 본다. 통째로 글자를 찾으면 설명 주석에
+# 속는다 -- 실제로 속았다. reportlab 을 지웠는데도 바로 위 주석에 그 이름이
+# 있어서 검사가 통과했다 (22·32·33·36 번과 같은 함정이다).
+_REQ40 = set()
+for _ln40 in open("requirements.txt", encoding="utf-8"):
+    _ln40 = _ln40.split("#")[0].strip().lower()
+    if not _ln40:
+        continue
+    for _sep40 in ("==", ">=", "<=", "~=", ">", "<", "[", ";"):
+        _ln40 = _ln40.split(_sep40)[0]
+    _REQ40.add(_ln40.strip())
+# 모듈 이름과 꾸러미 이름이 다른 것만 적는다.
+_PKG40 = {"sklearn": "scikit-learn", "PIL": "pillow", "yaml": "pyyaml"}
+# 앱이 닿는 파일 : 화면과 그 화면이 **부르는 것**까지 센다.
+_FILES40 = ["app.py", "ui.py", "charts.py", "export.py", "recommend.py",
+            "order_check.py"]
+
+_std40 = set(_sys40.stdlib_module_names)
+_local40 = {"litho", "ui", "charts", "export", "recommend", "order_check",
+            "dataset_build", "identify", "process_window", "train_surrogate"}
+_missing40, _seen40 = [], set()
+for _f40 in _FILES40:
+    for _n40 in _ast40.walk(_ast40.parse(open(_f40, encoding="utf-8").read())):
+        _names40 = []
+        if isinstance(_n40, _ast40.Import):
+            _names40 = [a.name for a in _n40.names]
+        elif isinstance(_n40, _ast40.ImportFrom) and _n40.level == 0:
+            _names40 = [_n40.module or ""]
+        for _m40 in _names40:
+            _top40 = _m40.split(".")[0]
+            if not _top40 or _top40 in _std40 or _top40 in _local40:
+                continue
+            _seen40.add(_top40)
+            _pkg40 = _PKG40.get(_top40, _top40).lower()
+            if _pkg40 not in _REQ40:
+                _missing40.append((_f40, _top40, _pkg40))
+
+chk(len(_seen40) >= 5, "바깥 꾸러미를 실제로 찾아냈다 (검사가 공집합이 아니다)",
+    f"{sorted(_seen40)}")
+chk(not _missing40, "앱이 닿는 바깥 꾸러미가 모두 requirements.txt 에 있다",
+    f"빠진 것 {_missing40[:4]}")
+chk(len(_REQ40) >= 5, "requirements 를 줄 단위로 읽어 냈다",
+    f"{sorted(_REQ40)} — 비어 있으면 위 검사가 전부 실패로 뒤집힌다")
+
+# 가벼운 배포 목록을 되살리면 다시 같은 사고가 난다.
+import os as _os40
+chk(not _os40.path.exists("requirements-app.txt"),
+    "scikit-learn 을 뺀 배포용 목록을 두지 않는다",
+    "그 목록으로 올리면 조건 추천과 내려받기가 조용히 죽는다")
+
 print(f"\n{'=' * 78}")
 # `run_all_checks.py` 가 ' 결과: p/t 통과' 를 정규식으로 찾아 회귀 케이스
 # 합계를 낸다. 이 줄의 형식을 바꾸면 합계에 **0 으로** 들어가고, 문서에 적힌
@@ -2809,10 +2956,10 @@ print("""
    해석      Case 3, 5, 8, 9, 10, 12, 14, 15, 16, 18 — 측정 자체가 뜻을
              갖는 조건.
              음성 대조가 있다.
-   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38 — 코드가 지켜야 하는 관계.
+   불변량    Case 1, 2, 4, 6, 7, 11, 13, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 — 코드가 지켜야 하는 관계.
              Case 24 는 모형 파일 없이 번들을 손으로 만들어 관문을 잰다.\n             Case 11 의 784 조합과 Case 13 의 예산 왕복은 이론값·닫힌
              꼴과의 **정확** 대조다(시뮬레이션이 아니다).
-   -> 38 개 가운데 36 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
+   -> 40 개 가운데 38 개는 **실제로 한 번 틀렸던 것**이다. 35 번과 37 번 (나) 는 아직
       틀린 적이 없다. 35 번은 110 번과 **같은 종류의 이음매**(앱과 추천기가
       같은 이름을 서로 다르게 적는 것)를, 37 번 (나) 는 화면을 옮길 때 조건이
       말없이 사라지는 것을 막으려고 넣었다. 추측으로 넣은

@@ -57,9 +57,6 @@ PASS_BG = "#EFEAFD"
 UNDET_BG = "#EFEDE7"
 VIOL_BG = "#FBF0DE"
 
-#: 옛 이름. 바깥에서 쓰지 않지만 지우면 남의 코드가 깨지므로 남긴다.
-OK, WARN, BAD = PASS, VIOL, "#6B2545"
-
 # 차트 색. `charts.py` 가 쓴다. 세 색의 **명도가 서로 다르므로** 흑백으로
 # 인쇄해도 구별된다. 색상만으로 가르면 색각 이상에서 겹친다.
 FG = TXT                # 본문과 같은 밝기
@@ -123,17 +120,6 @@ h3 {{ font-size: .94rem !important; font-weight: 600; }}
 [data-testid="stMetric"] {{
   background: var(--surf); border: 1px solid var(--line);
   border-radius: 10px; padding: .85rem 1rem;
-}}
-
-/* 탭 : 알약 대신 밑줄 */
-.stTabs [data-baseweb="tab-list"] {{ gap: .1rem; border-bottom: 1px solid var(--line); }}
-.stTabs [data-baseweb="tab"] {{
-  height: 2.4rem; padding: 0 .95rem; font-size: .86rem;
-  color: var(--muted); border-radius: 0;
-}}
-.stTabs [aria-selected="true"] {{
-  color: var(--txt) !important; font-weight: 600;
-  box-shadow: inset 0 -2px 0 0 var(--accent);
 }}
 
 /* 사이드바 : 손잡이가 많으므로 글자와 간격을 줄인다 */
@@ -307,7 +293,7 @@ section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
 def chips(items) -> str:
     """조건 요약 띠. (이름, 값, 단위) 를 받아 한 줄로 만든다.
 
-    탭을 옮겨 다녀도 **지금 어떤 조건을 보고 있는지**가 늘 보이게 한다.
+    화면을 옮겨 다녀도 **지금 어떤 조건을 보고 있는지**가 늘 보이게 한다.
     조건이 사이드바에만 있으면 접은 뒤에는 알 수 없다.
     """
     out = ['<div class="k-bar">']

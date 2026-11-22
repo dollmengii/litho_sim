@@ -457,7 +457,7 @@ if not print_check["printable"]:
     )
 
 # ───────────────────── 출력 ─────────────────────
-# 조건 요약 띠. 탭을 옮겨 다녀도 **지금 어떤 조건을 보고 있는지**가 보여야
+# 조건 요약 띠. 화면을 옮겨 다녀도 **지금 어떤 조건을 보고 있는지**가 보여야
 # 한다. 사이드바는 접히고 스크롤되므로 그것만으로는 알 수 없다.
 st.markdown(UI.chips([
     ("λ", f"{wavelength:g}", "nm"),
@@ -531,7 +531,7 @@ if nav == "마스크 패턴":
         # [13차 보완 99 번] 예전 matplotlib 판은 같은 1 차원 단면을 y 로
         # 복제해 2 차원 그림으로 띄웠다. 그래서 y 축이 있었지만 거기에는
         # 아무 정보도 없었다. 띠로 바꾸면서 y 축이 사라졌으므로, 라벨이
-        # 그 사실을 말하게 한다. 실제 2 차원 결과는 '확률 모델' 탭에 있다.
+        # 그 사실을 말하게 한다. 실제 2 차원 결과는 '확률 모델' 화면에 있다.
         label="마스크 (위에서 본 모습 · y 방향 균일)",
     ), unsafe_allow_html=True)
     st.markdown(UI.chips([
@@ -896,12 +896,19 @@ if nav == "확률 모델":
             # 횟수가 아니라 y 측정 길이에 수렴하므로, 길이를 안 보이면 위
             # 숫자가 무엇을 잰 값인지 알 수 없다(한계 103~114 의 처방 '가').
             # 글월 대신 값으로만 띄운다.
-            st.markdown(UI.chips([
-                ("y 측정 길이", f"{mc['y_length_nm']:.0f}", "nm"),
+            # `mc` 의 y_length_nm·n_samples 는 **형성됐을 때만** 들어 있는
+            # 열쇠다. 바로 위에서 '미형성' 을 띄워 놓고 여기서 조건 없이
+            # 꺼내면 그 조건에서 화면이 KeyError 로 죽는다. 실제로 7 주차부터
+            # 그랬다. 길이와 격자는 `sr` 에 늘 있으므로 그쪽에서 가져오고,
+            # 표본 수만 형성됐을 때 붙인다.
+            _mchips = [
+                ("y 측정 길이", f"{sr['n_rows'] * sr['dy']:.0f}", "nm"),
                 ("행", f"{sr['n_rows']}", ""),
                 ("dy", f"{sr['dy']:.2f}", "nm"),
-                ("경계 표본", f"{mc['n_samples']:,}", "개"),
-            ]), unsafe_allow_html=True)
+            ]
+            if mc["formed"]:
+                _mchips.append(("경계 표본", f"{mc['n_samples']:,}", "개"))
+            st.markdown(UI.chips(_mchips), unsafe_allow_html=True)
 
             st.subheader("결정론 모델 대 확률 모델")
             figs, axs = plt.subplots(2, 1, figsize=(9, 3.6), sharex=True)
