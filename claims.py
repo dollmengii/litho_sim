@@ -198,6 +198,43 @@ def build_table_cases(spec):
     cases.append(("k1=0.25 한계 half-pitch [nm]", 35.74,
                   OP.half_pitch_limit(0.25, 193.0, 1.35), 1e-3))
 
+    # --- MEEF (14주차 보완 116 번) ----------------------------------------
+    # 왜 넣는가 : README 의 MEEF 표는 **산문과 표**에만 있어서 어떤 시험도
+    # 읽지 않았다. 실제로 세 줄(160·120·100 nm)이 옛 측정값으로 남아 있었고
+    # 회귀 595 종과 claims 58 항목이 모두 통과하는 동안 아무도 못 잡았다.
+    # 1.5 초면 다섯 줄을 다시 잴 수 있으므로 표째로 묶는다.
+    # 조건을 여기 적어 둔다. 조건 없이는 MEEF 는 숫자가 아니다.
+    #   lam 193 nm · NA 1.35 · n 1.44 · sigma 0.70 · duty 0.5 · 문턱 0.30
+    #   격자 n_periods 6 · dx 0.25 nm · 중앙차분 +-2 nm · 노광량 고정
+    from litho import grid as _G
+    from litho import imaging as _IM
+    from litho import mask as _MK
+    from litho import resist as _RS
+
+    def _meef_at(pitch):
+        g = _G.build_grid(pitch=pitch, n_periods=6, dx_target=0.25)
+        cd0 = 0.5 * pitch
+
+        def _ai(cd):
+            return _IM.aerial_image(
+                g, _MK.line_space(g, cd=cd, polarity="clear"), 193.0, 1.35,
+                n_medium=1.44, sigma_out=0.70, sigma_in=0.0, defocus=0.0,
+                n_source_grid=21)
+
+        d0 = PR.dose_to_size(g, _ai(cd0), cd0, 0.30, _RS.TONE_BRIGHT,
+                             max_width=pitch)
+        return float(PR.meef(g, _ai(cd0 - 2.0), _ai(cd0 + 2.0), cd0 - 2.0,
+                             cd0 + 2.0, 0.30, _RS.TONE_BRIGHT,
+                             dose=float(d0), max_width=pitch))
+
+    for _p, _doc_m, _doc_b in ((400.0, 0.96, 1.92), (240.0, 0.98, 1.96),
+                               (160.0, 0.97, 1.94), (120.0, 1.86, 3.72),
+                               (100.0, 4.74, 9.48)):
+        _m = _meef_at(_p)
+        cases.append((f"MEEF (피치 {_p:.0f} nm)", _doc_m, _m, 5e-3))
+        cases.append((f"마스크 몫 [nm] (피치 {_p:.0f} nm, CDU 2 nm)",
+                      _doc_b, float(PR.mask_budget(_m, 2.0)), 1e-2))
+
     # --- 고NA 초점심도 (13주차 보완 96 번) --------------------------------
     # 이 함수들은 4주차에 들어온 뒤 9 주 동안 **시험이 하나도 없었다.**
     # 그 사이 화면은 k3 에 k2 를 넣고 분모의 2 도 빠뜨린 값(306.3 nm,
